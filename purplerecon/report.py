@@ -39,6 +39,8 @@ def to_terminal(result: ScanResult) -> str:
         out.append(f"{c}[{f.severity.upper():6}]{_RESET} {f.title}")
         if f.detail:
             out.append(f"          {f.detail}")
+        if f.component:
+            out.append(f"          {_PURPLE}Affected component:{_RESET} {f.component}")
         if f.impact:
             out.append(f"          {_PURPLE}How it's exploited:{_RESET} {f.impact}")
         if f.exposed:
@@ -46,7 +48,8 @@ def to_terminal(result: ScanResult) -> str:
         if f.remediation:
             out.append(f"          {_PURPLE}Fix:{_RESET} {f.remediation}")
         if f.reference:
-            out.append(f"          ↳ {f.reference}")
+            label = "Location (lock down this URL)" if f.category == "exposure" else "Reference"
+            out.append(f"          {_PURPLE}{label}:{_RESET} {f.reference}")
         out.append("")
     return "\n".join(out)
 
@@ -61,9 +64,15 @@ def _block(label: str, value: str, cls: str) -> str:
 def to_html(result: ScanResult) -> str:
     rows = []
     for f in _sorted(result):
-        ref = (f'<div class="line ref"><span class="lbl">Reference</span>'
-               f'<a href="{html.escape(f.reference)}" target="_blank" rel="noopener">'
-               f'{html.escape(f.reference)}</a></div>') if f.reference else ""
+        if f.reference:
+            is_loc = f.category == "exposure"
+            ref_label = "Location — lock down this URL" if is_loc else "Reference"
+            ref_cls = "loc" if is_loc else "ref"
+            ref = (f'<div class="line {ref_cls}"><span class="lbl">{ref_label}</span>'
+                   f'<a href="{html.escape(f.reference)}" target="_blank" rel="noopener">'
+                   f'{html.escape(f.reference)}</a></div>')
+        else:
+            ref = ""
         rows.append(f"""
         <tr class="sev-{f.severity}">
           <td class="sevcol"><span class="badge {f.severity}">{f.severity.upper()}</span>
@@ -71,6 +80,7 @@ def to_html(result: ScanResult) -> str:
           <td>
             <div class="title">{html.escape(f.title)}</div>
             <div class="detail">{html.escape(f.detail)}</div>
+            {_block("Affected component", f.component, "component")}
             {_block("How it's exploited", f.impact, "impact")}
             {_block("What's exposed", f.exposed, "exposed")}
             {_block("Fix", f.remediation, "fix")}
@@ -116,10 +126,13 @@ def to_html(result: ScanResult) -> str:
   .line {{ margin:5px 0; font-size:12px; line-height:1.5; padding-left:10px;
           border-left:2px solid var(--line); }}
   .lbl {{ display:inline-block; font-weight:700; margin-right:8px; }}
+  .component {{ border-left-color:#8b5cf6; }} .component .lbl {{ color:#c4b5fd; }}
   .impact {{ border-left-color:#ef4444; }} .impact .lbl {{ color:#fca5a5; }}
   .exposed {{ border-left-color:#f59e0b; }} .exposed .lbl {{ color:#fcd34d; }}
   .fix {{ border-left-color:#22c55e; }} .fix .lbl {{ color:#86efac; }}
   .ref {{ border-left-color:var(--p); }} .ref .lbl {{ color:var(--p2); }}
+  .loc {{ border-left-color:#f59e0b; background:#2a1c10; padding:7px 10px; border-radius:4px; }}
+  .loc .lbl {{ color:#fcd34d; }} .loc a {{ color:#fde68a; }}
   .badge {{ padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }}
   .badge.high {{ background:#7f1d1d; color:#fecaca; }}
   .badge.medium {{ background:#78350f; color:#fed7aa; }}

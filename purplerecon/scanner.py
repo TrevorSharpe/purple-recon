@@ -44,6 +44,7 @@ class Finding:
     detail: str
     impact: str = ""        # how it can be exploited / what an attacker gains
     exposed: str = ""       # the actual information observed leaking (redacted)
+    component: str = ""     # affected component/module named in the advisory
     remediation: str = ""   # how to fix it
     reference: str = ""
 
@@ -375,6 +376,7 @@ def correlate_cves(result: ScanResult, max_per_product: int = 5) -> None:
                 severity=sev,
                 detail=(desc[:300] + "…") if len(desc) > 300 else desc,
                 impact=_impact_sentence(cvss),
+                component=_affected_component(desc, cwe),
                 remediation=f"Upgrade {sw} to a fixed release; review the vendor advisory "
                             f"linked below and apply interim mitigations until patched.",
                 reference=f"https://nvd.nist.gov/vuln/detail/{cid}",
@@ -400,6 +402,71 @@ def _cwe(weaknesses: list) -> str:
             if v.startswith("CWE-") and v != "CWE-noinfo":
                 return v
     return ""
+
+
+# Human-readable names for common weakness classes (from MITRE CWE).
+_CWE_NAMES = {
+    "CWE-20": "Improper Input Validation", "CWE-22": "Path Traversal",
+    "CWE-77": "Command Injection", "CWE-78": "OS Command Injection",
+    "CWE-79": "Cross-site Scripting (XSS)", "CWE-89": "SQL Injection",
+    "CWE-94": "Code Injection", "CWE-125": "Out-of-bounds Read",
+    "CWE-190": "Integer Overflow", "CWE-200": "Information Exposure",
+    "CWE-287": "Improper Authentication", "CWE-306": "Missing Authentication",
+    "CWE-352": "Cross-Site Request Forgery (CSRF)", "CWE-416": "Use After Free",
+    "CWE-434": "Unrestricted File Upload", "CWE-476": "NULL Pointer Dereference",
+    "CWE-502": "Deserialization of Untrusted Data", "CWE-611": "XML External Entity (XXE)",
+    "CWE-787": "Out-of-bounds Write", "CWE-798": "Hard-coded Credentials",
+    "CWE-862": "Missing Authorization", "CWE-863": "Incorrect Authorization",
+    "CWE-918": "Server-Side Request Forgery (SSRF)",
+}
+
+_AREA_KEYWORDS = (r"directives?|scripts?|normalization|parsing|parser|handling|decoding|"
+                  r"deserialization|serialization|validation|sanitization|routine|mechanism|"
+                  r"endpoint|interface|module|component|function|handler|plugin|feature|filter")
+_AREA_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9\-]*(?:\s+[A-Za-z][A-Za-z0-9\-]*)?)\s+(" + _AREA_KEYWORDS + r")\b",
+    re.I,
+)
+_STOPWORDS = {"the", "a", "an", "this", "that", "these", "those", "affected",
+              "vulnerable", "such", "any", "some", "which", "for", "and", "or",
+              "of", "to", "in", "by", "with", "usual", "default", "if", "on",
+              "from", "into", "when", "where", "via", "also", "not", "only"}
+
+
+def _affected_component(desc: str, cwe: str = "") -> str:
+    """Surface the affected area NAMED in the advisory, plus the weakness class.
+
+    This only reflects what the public NVD/CWE data already states (e.g.
+    'Path Traversal in path normalization / CGI scripts') so a defender knows
+    which part to patch, disable, or harden. It does NOT construct an endpoint,
+    parameter, or payload.
+    """
+    parts: list[str] = []
+    if cwe and cwe in _CWE_NAMES:
+        parts.append(f"weakness: {_CWE_NAMES[cwe]}")
+
+    if desc:
+        hits: list[str] = []
+        hits += re.findall(r"\bmod_[a-z0-9_]+\b", desc)               # Apache modules
+        hits += re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]{2,}\(\)", desc)  # function() refs
+        for m in _AREA_RE.finditer(desc):
+            # drop any leading preposition/stopword tokens (e.g. "to path" -> "path")
+            tokens = m.group(1).strip().split()
+            while tokens and tokens[0].lower() in _STOPWORDS:
+                tokens.pop(0)
+            word = " ".join(tokens)
+            if word and word.lower() not in _STOPWORDS and len(word) > 2:
+                hits.append(f"{word} {m.group(2).lower()}")
+        seen: set[str] = set()
+        for h in hits:
+            k = h.lower()
+            if k not in seen:
+                seen.add(k)
+                parts.append(h)
+                if len(parts) >= 5:
+                    break
+
+    return "; ".join(parts)
 
 
 def _impact_sentence(cvss: dict) -> str:
