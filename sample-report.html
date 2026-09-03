@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Purple Recon — https://example.com</title>
+<style>
+  :root { --bg:#140a1f; --card:#1e1030; --line:#38215a; --p:#a855f7; --p2:#c084fc; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:#ede9fe;
+         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { padding:28px 32px; background:linear-gradient(120deg,#2a1245,#12081e);
+           border-bottom:2px solid var(--p); }
+  h1 { margin:0; font-size:22px; color:var(--p2); letter-spacing:1px; }
+  .meta { margin-top:8px; font-size:13px; color:#b9a7d6; }
+  .wrap { padding:24px 32px; }
+  table { width:100%; border-collapse:collapse; background:var(--card);
+          border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th,td { text-align:left; padding:12px 14px; border-bottom:1px solid var(--line);
+          vertical-align:top; font-size:13px; }
+  th { background:#241338; color:var(--p2); text-transform:uppercase; font-size:11px; }
+  .detail { color:#c4b5db; margin:4px 0; font-size:12px; }
+  a { color:var(--p2); word-break:break-all; }
+  .badge { padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }
+  .badge.high { background:#7f1d1d; color:#fecaca; }
+  .badge.medium { background:#78350f; color:#fed7aa; }
+  .badge.low { background:#164e63; color:#a5f3fc; }
+  .badge.info { background:#312e40; color:#c7bcdb; }
+  footer { padding:16px 32px; color:#7a6a99; font-size:11px; }
+</style></head>
+<body>
+  <header>
+    <h1>◆ PURPLE RECON</h1>
+    <div class="meta">Target: https://example.com &nbsp;·&nbsp; 2026-09-03T02:41:16.928853+00:00<br>
+    Detected stack: —</div>
+  </header>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>Severity</th><th>Category</th><th>Finding</th></tr></thead>
+      <tbody>
+        <tr class="sev-medium">
+          <td><span class="badge medium">MEDIUM</span></td>
+          <td>headers</td>
+          <td><strong>HSTS not set</strong><div class="detail">Missing HSTS lets clients be downgraded to plaintext HTTP.</div></td>
+        </tr>
+        <tr class="sev-medium">
+          <td><span class="badge medium">MEDIUM</span></td>
+          <td>headers</td>
+          <td><strong>No Content-Security-Policy</strong><div class="detail">Absent CSP increases XSS blast radius.</div></td>
+        </tr>
+        <tr class="sev-low">
+          <td><span class="badge low">LOW</span></td>
+          <td>headers</td>
+          <td><strong>X-Frame-Options missing</strong><div class="detail">Page may be framed (clickjacking) if CSP frame-ancestors also absent.</div></td>
+        </tr>
+        <tr class="sev-low">
+          <td><span class="badge low">LOW</span></td>
+          <td>headers</td>
+          <td><strong>X-Content-Type-Options missing</strong><div class="detail">MIME-sniffing not disabled (set to &#x27;nosniff&#x27;).</div></td>
+        </tr>
+        <tr class="sev-info">
+          <td><span class="badge info">INFO</span></td>
+          <td>recon</td>
+          <td><strong>HTTP 200 from https://example.com/</strong><div class="detail">Final URL after redirects: https://example.com/</div></td>
+        </tr>
+        <tr class="sev-info">
+          <td><span class="badge info">INFO</span></td>
+          <td>fingerprint</td>
+          <td><strong>Server header</strong><div class="detail">cloudflare</div></td>
+        </tr>
+        <tr class="sev-info">
+          <td><span class="badge info">INFO</span></td>
+          <td>headers</td>
+          <td><strong>Referrer-Policy missing</strong><div class="detail">Referrer data may leak to third parties.</div></td>
+        </tr>
+        <tr class="sev-info">
+          <td><span class="badge info">INFO</span></td>
+          <td>tls</td>
+          <td><strong>TLS protocol</strong><div class="detail">TLSv1.3 / TLS_AES_256_GCM_SHA384</div></td>
+        </tr>
+        <tr class="sev-info">
+          <td><span class="badge info">INFO</span></td>
+          <td>tls</td>
+          <td><strong>Certificate valid</strong><div class="detail">Expires in 29 days (Oct  2 20:44:22 2026 GMT).</div></td>
+        </tr></tbody>
+    </table>
+  </div>
+  <footer>Authorized assessment only. Purple Recon identifies — it does not exploit.</footer>
+</body></html>
