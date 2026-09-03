@@ -41,6 +41,21 @@ python -m purplerecon example.com --no-cve -q      # skip NVD lookups, suppress 
 The **SARIF** output drops into GitHub code-scanning, Azure DevOps, and most
 CI security dashboards; **JSON** is easy to pipe into ticketing or custom tooling.
 
+
+## Web GUI
+
+Prefer typing a URL into a page? Run the local GUI:
+
+```bash
+python -m purplerecon.web        # then open http://127.0.0.1:8000
+python -m purplerecon.web --port 9000
+```
+
+It serves a purple console where you enter a target, tick the authorization
+box, and scan — the results render inline with the same impact / exposed /
+fix / found-at breakdown. It binds to localhost only, so the scanner isn't
+exposed to your network.
+
 ## ⚠️ Authorized use only
 
 Only scan systems you **own** or have **explicit written permission** to test.
