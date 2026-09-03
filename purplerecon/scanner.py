@@ -42,6 +42,7 @@ class Finding:
     title: str
     severity: str  # info | low | medium | high
     detail: str
+    location: str = ""      # URL where this finding was observed (required in report)
     impact: str = ""        # how it can be exploited / what an attacker gains
     exposed: str = ""       # the actual information observed leaking (redacted)
     component: str = ""     # affected component/module named in the advisory
@@ -84,24 +85,26 @@ def probe(url: str, result: ScanResult) -> requests.Response | None:
         resp = requests.get(url, headers={"User-Agent": USER_AGENT},
                             timeout=TIMEOUT, allow_redirects=True, verify=True)
     except RequestException as e:
-        result.add(category="connectivity", title="Target unreachable",
+        result.add(category="connectivity", title="Target unreachable", location=url,
                    severity="info", detail=f"Could not complete request: {e}")
         return None
 
     result.add(category="recon", title=f"HTTP {resp.status_code} from {resp.url}",
-               severity="info", detail=f"Final URL after redirects: {resp.url}")
+               severity="info", location=str(resp.url),
+               detail=f"Final URL after redirects: {resp.url}")
     return resp
 
 
 def fingerprint(resp: requests.Response, result: ScanResult) -> None:
     headers = resp.headers
+    loc = str(resp.url)
 
     server = headers.get("Server", "")
     if server:
         m = _SERVER_RE.match(server)
         versioned = bool(m)
         result.add(
-            category="fingerprint", title="Server header",
+            category="fingerprint", title="Server header", location=loc,
             severity="low" if versioned else "info", detail=server,
             impact=("The exact server software and version are advertised, letting an "
                     "attacker skip reconnaissance and look up version-specific exploits "
@@ -117,8 +120,8 @@ def fingerprint(resp: requests.Response, result: ScanResult) -> None:
         val = headers.get(hdr)
         if val:
             result.add(
-                category="fingerprint", title=f"Stack disclosure: {label}", severity="low",
-                detail=val,
+                category="fingerprint", title=f"Stack disclosure: {label}",
+                severity="low", detail=val, location=loc,
                 impact="Reveals the technology and version behind the site, narrowing an "
                        "attacker's search to exploits known to affect this exact stack.",
                 exposed=f"{hdr}: {val}",
@@ -137,7 +140,7 @@ def fingerprint(resp: requests.Response, result: ScanResult) -> None:
         if m:
             name = tmpl.format(*m.groups()) if m.groups() else tmpl
             result.add(category="fingerprint", title="Technology detected",
-                       severity="info", detail=name)
+                       severity="info", detail=name, location=loc)
             if any(c.isdigit() for c in name):
                 result.software.append(name)
 
@@ -192,33 +195,35 @@ _SECURITY_HEADERS = {
 
 
 def audit_headers(resp: requests.Response, result: ScanResult) -> None:
+    loc = str(resp.url)
     present = {k.lower() for k in resp.headers}
     for hdr, (title, sev, detail, impact, fix) in _SECURITY_HEADERS.items():
         if hdr not in present:
-            result.add(category="headers", title=title, severity=sev,
+            result.add(category="headers", title=title, severity=sev, location=loc,
                        detail=detail, impact=impact, remediation=fix)
 
 
 # --------------------------------------------------------------------------- #
 # TLS inspection
 # --------------------------------------------------------------------------- #
-def inspect_tls(host: str, port: int, result: ScanResult) -> None:
+def inspect_tls(host: str, port: int, result: ScanResult, url: str) -> None:
     ctx = ssl.create_default_context()
     try:
         with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as tls:
                 proto, cipher, cert = tls.version(), tls.cipher(), tls.getpeercert()
     except (ssl.SSLError, socket.error, OSError) as e:
-        result.add(category="tls", title="TLS check failed", severity="info", detail=str(e))
+        result.add(category="tls", title="TLS check failed", severity="info",
+                   detail=str(e), location=url)
         return
 
-    result.add(category="tls", title="TLS protocol", severity="info",
+    result.add(category="tls", title="TLS protocol", severity="info", location=url,
                detail=f"{proto} / {cipher[0] if cipher else '?'}", exposed=proto)
 
     if proto in ("TLSv1", "TLSv1.1", "SSLv3"):
         result.add(
             category="tls", title=f"Weak TLS protocol: {proto}", severity="high",
-            detail="A deprecated protocol version is accepted.", exposed=proto,
+            detail="A deprecated protocol version is accepted.", exposed=proto, location=url,
             impact="These protocols have known cryptographic weaknesses (e.g. BEAST, "
                    "POODLE) that can let an attacker decrypt or tamper with the session.",
             remediation="Disable SSLv3 / TLS 1.0 / TLS 1.1; require TLS 1.2 or 1.3.",
@@ -231,17 +236,17 @@ def inspect_tls(host: str, port: int, result: ScanResult) -> None:
             days = (exp - datetime.now(timezone.utc)).days
             if days < 0:
                 result.add(category="tls", title="Certificate expired", severity="high",
-                           detail=f"Expired {abs(days)} days ago ({not_after}).",
+                           detail=f"Expired {abs(days)} days ago ({not_after}).", location=url,
                            impact="Visitors get security warnings and may be trained to click "
                                   "through them, making a man-in-the-middle attack easier.",
                            remediation="Renew now and automate renewal (ACME / Let's Encrypt).")
             elif days < 21:
                 result.add(category="tls", title="Certificate expiring soon", severity="medium",
-                           detail=f"Expires in {days} days ({not_after}).",
+                           detail=f"Expires in {days} days ({not_after}).", location=url,
                            remediation="Renew before expiry; automate with ACME.")
             else:
                 result.add(category="tls", title="Certificate valid", severity="info",
-                           detail=f"Expires in {days} days ({not_after}).")
+                           detail=f"Expires in {days} days ({not_after}).", location=url)
         except ValueError:
             pass
 
@@ -330,7 +335,7 @@ def discover_paths(base: str, result: ScanResult) -> None:
                     exposed += " — " + summary
             result.add(category="exposure", title=f"Accessible: {path}", severity=sev,
                        detail=detail, impact=impact, exposed=exposed,
-                       remediation=fix, reference=root + path)
+                       remediation=fix, location=root + path)
         time.sleep(0.15)
 
 
@@ -349,7 +354,7 @@ _IMPACT_TEXT = {"HIGH": "full", "LOW": "partial", "NONE": "no",
                 "COMPLETE": "full", "PARTIAL": "partial"}
 
 
-def correlate_cves(result: ScanResult, max_per_product: int = 5) -> None:
+def correlate_cves(result: ScanResult, observed_url: str, max_per_product: int = 5) -> None:
     for sw in result.software:
         keyword = sw.replace("/", " ").strip()
         try:
@@ -375,6 +380,7 @@ def correlate_cves(result: ScanResult, max_per_product: int = 5) -> None:
                 title=f"{cid} affects {sw}" + (f"  [{cwe}]" if cwe else ""),
                 severity=sev,
                 detail=(desc[:300] + "…") if len(desc) > 300 else desc,
+                location=observed_url,
                 impact=_impact_sentence(cvss),
                 component=_affected_component(desc, cwe),
                 remediation=f"Upgrade {sw} to a fixed release; review the vendor advisory "
@@ -504,11 +510,16 @@ def run_scan(target: str, do_paths: bool = True, do_cve: bool = True) -> ScanRes
     fingerprint(resp, result)
     audit_headers(resp, result)
 
-    parsed = urlparse(str(resp.url))
+    observed = str(resp.url)
+    parsed = urlparse(observed)
     if parsed.scheme == "https":
-        inspect_tls(parsed.hostname, parsed.port or 443, result)
+        inspect_tls(parsed.hostname, parsed.port or 443, result, observed)
     if do_paths:
-        discover_paths(str(resp.url), result)
+        discover_paths(observed, result)
     if do_cve and result.software:
-        correlate_cves(result)
+        correlate_cves(result, observed)
+
+    # Requirement: every reported finding must have a URL where it was observed.
+    # Drop anything without a location so the report can't contain locationless items.
+    result.findings = [f for f in result.findings if f.location]
     return result

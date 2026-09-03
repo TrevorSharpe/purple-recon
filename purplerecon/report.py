@@ -47,9 +47,11 @@ def to_terminal(result: ScanResult) -> str:
             out.append(f"          {_PURPLE}What's exposed:{_RESET} {f.exposed}")
         if f.remediation:
             out.append(f"          {_PURPLE}Fix:{_RESET} {f.remediation}")
+        if f.location:
+            label = "Found at (lock down this URL)" if f.category == "exposure" else "Found at"
+            out.append(f"          {_PURPLE}{label}:{_RESET} {f.location}")
         if f.reference:
-            label = "Location (lock down this URL)" if f.category == "exposure" else "Reference"
-            out.append(f"          {_PURPLE}{label}:{_RESET} {f.reference}")
+            out.append(f"          {_PURPLE}Reference:{_RESET} {f.reference}")
         out.append("")
     return "\n".join(out)
 
@@ -64,15 +66,15 @@ def _block(label: str, value: str, cls: str) -> str:
 def to_html(result: ScanResult) -> str:
     rows = []
     for f in _sorted(result):
-        if f.reference:
-            is_loc = f.category == "exposure"
-            ref_label = "Location — lock down this URL" if is_loc else "Reference"
-            ref_cls = "loc" if is_loc else "ref"
-            ref = (f'<div class="line {ref_cls}"><span class="lbl">{ref_label}</span>'
-                   f'<a href="{html.escape(f.reference)}" target="_blank" rel="noopener">'
-                   f'{html.escape(f.reference)}</a></div>')
-        else:
-            ref = ""
+        is_loc_exposure = f.category == "exposure"
+        loc_label = "Found at — lock down this URL" if is_loc_exposure else "Found at"
+        loc_cls = "loc" if is_loc_exposure else "foundat"
+        loc_block = (f'<div class="line {loc_cls}"><span class="lbl">{loc_label}</span>'
+                     f'<a href="{html.escape(f.location)}" target="_blank" rel="noopener">'
+                     f'{html.escape(f.location)}</a></div>') if f.location else ""
+        ref_block = (f'<div class="line ref"><span class="lbl">Reference</span>'
+                     f'<a href="{html.escape(f.reference)}" target="_blank" rel="noopener">'
+                     f'{html.escape(f.reference)}</a></div>') if f.reference else ""
         rows.append(f"""
         <tr class="sev-{f.severity}">
           <td class="sevcol"><span class="badge {f.severity}">{f.severity.upper()}</span>
@@ -84,7 +86,8 @@ def to_html(result: ScanResult) -> str:
             {_block("How it's exploited", f.impact, "impact")}
             {_block("What's exposed", f.exposed, "exposed")}
             {_block("Fix", f.remediation, "fix")}
-            {ref}
+            {loc_block}
+            {ref_block}
           </td>
         </tr>""")
 
@@ -131,6 +134,7 @@ def to_html(result: ScanResult) -> str:
   .exposed {{ border-left-color:#f59e0b; }} .exposed .lbl {{ color:#fcd34d; }}
   .fix {{ border-left-color:#22c55e; }} .fix .lbl {{ color:#86efac; }}
   .ref {{ border-left-color:var(--p); }} .ref .lbl {{ color:var(--p2); }}
+  .foundat {{ border-left-color:#38bdf8; }} .foundat .lbl {{ color:#7dd3fc; }} .foundat a {{ color:#bae6fd; }}
   .loc {{ border-left-color:#f59e0b; background:#2a1c10; padding:7px 10px; border-radius:4px; }}
   .loc .lbl {{ color:#fcd34d; }} .loc a {{ color:#fde68a; }}
   .badge {{ padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }}
@@ -153,3 +157,78 @@ def to_html(result: ScanResult) -> str:
   </div>
   <footer>Authorized assessment only. Purple Recon identifies and explains — it does not exploit.</footer>
 </body></html>"""
+
+
+# --------------------------------------------------------------------------- #
+# Machine-readable output: JSON and SARIF 2.1.0 (for CI / ticketing pipelines)
+# --------------------------------------------------------------------------- #
+import json
+from dataclasses import asdict
+
+
+def to_json(result: ScanResult) -> str:
+    payload = {
+        "tool": "PurpleRecon",
+        "target": result.target,
+        "started": result.started,
+        "software": result.software,
+        "findings": [asdict(f) for f in _sorted(result)],
+    }
+    return json.dumps(payload, indent=2)
+
+
+# SARIF severity mapping
+_SARIF_LEVEL = {"high": "error", "medium": "warning", "low": "note", "info": "none"}
+
+
+def to_sarif(result: ScanResult) -> str:
+    rules: dict[str, dict] = {}
+    results = []
+    for f in _sorted(result):
+        rule_id = f"{f.category}/{f.title.split(':')[0].strip()}".replace(" ", "-")
+        rules.setdefault(rule_id, {
+            "id": rule_id,
+            "name": f.title,
+            "shortDescription": {"text": f.title},
+            "defaultConfiguration": {"level": _SARIF_LEVEL.get(f.severity, "none")},
+        })
+        message_parts = [f.detail]
+        if f.impact:
+            message_parts.append(f"Impact: {f.impact}")
+        if f.exposed:
+            message_parts.append(f"Exposed: {f.exposed}")
+        if f.component:
+            message_parts.append(f"Affected component: {f.component}")
+        if f.remediation:
+            message_parts.append(f"Remediation: {f.remediation}")
+        result_obj = {
+            "ruleId": rule_id,
+            "level": _SARIF_LEVEL.get(f.severity, "none"),
+            "message": {"text": "  ".join(p for p in message_parts if p)},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": f.location}
+                }
+            }],
+            "properties": {
+                "severity": f.severity,
+                "category": f.category,
+                "reference": f.reference,
+            },
+        }
+        results.append(result_obj)
+
+    sarif = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {
+                "name": "PurpleRecon",
+                "informationUri": "https://github.com/TrevorSharpe/purple-recon",
+                "version": "1.2.0",
+                "rules": list(rules.values()),
+            }},
+            "results": results,
+        }],
+    }
+    return json.dumps(sarif, indent=2)

@@ -33,6 +33,7 @@
   .exposed { border-left-color:#f59e0b; } .exposed .lbl { color:#fcd34d; }
   .fix { border-left-color:#22c55e; } .fix .lbl { color:#86efac; }
   .ref { border-left-color:var(--p); } .ref .lbl { color:var(--p2); }
+  .foundat { border-left-color:#38bdf8; } .foundat .lbl { color:#7dd3fc; } .foundat a { color:#bae6fd; }
   .loc { border-left-color:#f59e0b; background:#2a1c10; padding:7px 10px; border-radius:4px; }
   .loc .lbl { color:#fcd34d; } .loc a { color:#fde68a; }
   .badge { padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }
@@ -46,9 +47,9 @@
 <body>
   <header>
     <h1>◆ PURPLE RECON</h1>
-    <div class="meta">Target: https://demo.local &nbsp;·&nbsp; 2026-09-03T03:08:00Z<br>
+    <div class="meta">Target: https://demo.local &nbsp;·&nbsp; 2026-09-03T03:15:00Z<br>
     Detected stack: Apache 2.4.49</div>
-    <div class="chips"><span class="chip high">HIGH 3</span><span class="chip medium">MEDIUM 0</span><span class="chip low">LOW 0</span><span class="chip info">INFO 0</span></div>
+    <div class="chips"><span class="chip high">HIGH 3</span><span class="chip medium">MEDIUM 1</span><span class="chip low">LOW 0</span><span class="chip info">INFO 0</span></div>
   </header>
   <div class="wrap">
     <table><tbody>
@@ -62,6 +63,7 @@
             <div class="line impact"><span class="lbl">How it's exploited</span>Exploitable remotely over the network, with no prior access. Potential result — full disclosure of data (confidentiality); full tampering with data (integrity); full disruption of service (availability). CVSS vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H.</div>
             
             <div class="line fix"><span class="lbl">Fix</span>Upgrade Apache 2.4.49 to a fixed release; review the vendor advisory linked below and apply interim mitigations until patched.</div>
+            <div class="line foundat"><span class="lbl">Found at</span><a href="https://demo.local/" target="_blank" rel="noopener">https://demo.local/</a></div>
             <div class="line ref"><span class="lbl">Reference</span><a href="https://nvd.nist.gov/vuln/detail/CVE-2021-41773" target="_blank" rel="noopener">https://nvd.nist.gov/vuln/detail/CVE-2021-41773</a></div>
           </td>
         </tr>
@@ -75,6 +77,7 @@
             <div class="line impact"><span class="lbl">How it's exploited</span>Exploitable remotely over the network, with no prior access. Potential result — full disclosure of data (confidentiality); full tampering with data (integrity); full disruption of service (availability). CVSS vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H.</div>
             
             <div class="line fix"><span class="lbl">Fix</span>Upgrade Apache 2.4.49 to a fixed release; review the vendor advisory linked below and apply interim mitigations until patched.</div>
+            <div class="line foundat"><span class="lbl">Found at</span><a href="https://demo.local/" target="_blank" rel="noopener">https://demo.local/</a></div>
             <div class="line ref"><span class="lbl">Reference</span><a href="https://nvd.nist.gov/vuln/detail/CVE-2021-42013" target="_blank" rel="noopener">https://nvd.nist.gov/vuln/detail/CVE-2021-42013</a></div>
           </td>
         </tr>
@@ -83,12 +86,27 @@
               <div class="cat">exposure</div></td>
           <td>
             <div class="title">Accessible: /.env</div>
-            <div class="detail">An environment/secrets file is web-accessible.</div>
+            <div class="detail">Secrets file web-accessible.</div>
             
-            <div class="line impact"><span class="lbl">How it's exploited</span>These files typically hold database passwords, API keys, and app secrets.</div>
-            <div class="line exposed"><span class="lbl">What's exposed</span>HTTP 200, 92 bytes at /.env — 5 variables exposed (values redacted): DB_HOST, DB_PASSWORD, STRIPE_SECRET_KEY, JWT_SECRET, DEBUG | Sensitive names to rotate: DB_PASSWORD, STRIPE_SECRET_KEY, JWT_SECRET</div>
-            <div class="line fix"><span class="lbl">Fix</span>Deny web access to dotfiles; rotate every exposed secret immediately.</div>
-            <div class="line loc"><span class="lbl">Location — lock down this URL</span><a href="https://demo.local/.env" target="_blank" rel="noopener">https://demo.local/.env</a></div>
+            <div class="line impact"><span class="lbl">How it's exploited</span>Holds DB/API secrets.</div>
+            <div class="line exposed"><span class="lbl">What's exposed</span>HTTP 200, 40 bytes at /.env — 2 variables exposed (values redacted): DB_PASSWORD, STRIPE_SECRET_KEY | Sensitive names to rotate: DB_PASSWORD, STRIPE_SECRET_KEY</div>
+            <div class="line fix"><span class="lbl">Fix</span>Deny web access to dotfiles; rotate secrets.</div>
+            <div class="line loc"><span class="lbl">Found at — lock down this URL</span><a href="https://demo.local/.env" target="_blank" rel="noopener">https://demo.local/.env</a></div>
+            
+          </td>
+        </tr>
+        <tr class="sev-medium">
+          <td class="sevcol"><span class="badge medium">MEDIUM</span>
+              <div class="cat">headers</div></td>
+          <td>
+            <div class="title">HSTS not set</div>
+            <div class="detail">Browsers may connect over plaintext HTTP at least once.</div>
+            
+            <div class="line impact"><span class="lbl">How it's exploited</span>On-path attacker can strip TLS.</div>
+            
+            <div class="line fix"><span class="lbl">Fix</span>Send HSTS header.</div>
+            <div class="line foundat"><span class="lbl">Found at</span><a href="https://demo.local/" target="_blank" rel="noopener">https://demo.local/</a></div>
+            
           </td>
         </tr></tbody></table>
   </div>

@@ -19,16 +19,27 @@ proper authorization.
 - **CVE correlation** — detected versions → known CVEs via the NVD 2.0 API,
   each linked to its NVD detail page (which references Exploit-DB where relevant)
 
+Every finding carries the **URL where it was observed** — the exact file URL
+for an exposed resource, or the fingerprinted endpoint where a vulnerable
+version/header was seen. Findings without a location are excluded from the
+report. (For CVEs the location is where the vulnerable version was *detected*,
+not a crafted exploit URL.)
+
 ## Usage
 
 ```bash
 pip install -r requirements.txt
 
-python -m purplerecon example.com                 # full assessment (prompts for auth)
-python -m purplerecon https://example.com -y      # skip the auth prompt
-python -m purplerecon example.com --html out.html # also write a themed HTML report
-python -m purplerecon example.com --no-cve        # skip NVD lookups (faster)
+python -m purplerecon example.com                  # full assessment (prompts for auth)
+python -m purplerecon https://example.com -y       # skip the auth prompt
+python -m purplerecon example.com --html out.html  # themed HTML report
+python -m purplerecon example.com --json out.json  # machine-readable JSON
+python -m purplerecon example.com --sarif out.sarif # SARIF 2.1.0 for CI/code-scanning
+python -m purplerecon example.com --no-cve -q      # skip NVD lookups, suppress terminal
 ```
+
+The **SARIF** output drops into GitHub code-scanning, Azure DevOps, and most
+CI security dashboards; **JSON** is easy to pipe into ticketing or custom tooling.
 
 ## ⚠️ Authorized use only
 
