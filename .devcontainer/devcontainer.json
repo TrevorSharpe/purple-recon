@@ -2,6 +2,7 @@
   "name": "Purple Recon",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
   "postCreateCommand": "pip install -r requirements.txt",
+  "postAttachCommand": "python -m purplerecon.web --host 0.0.0.0",
   "forwardPorts": [8000],
   "portsAttributes": {
     "8000": {
