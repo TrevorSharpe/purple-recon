@@ -54,7 +54,10 @@ python -m purplerecon.web --port 9000
 It serves a purple console where you enter a target, tick the authorization
 box, and scan — the results render inline with the same impact / exposed /
 fix / found-at breakdown. It binds to localhost only, so the scanner isn't
-exposed to your network.
+exposed to your network. The page is responsive and works on a phone.
+
+**On iPhone?** See [MOBILE.md](MOBILE.md) — run it on-device with iSH, or run
+it on another machine and reach it privately from the phone.
 
 ## ⚠️ Authorized use only
 

@@ -72,7 +72,11 @@ def main() -> None:
 # --------------------------------------------------------------------------- #
 _PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#140a1f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Purple Recon">
 <title>Purple Recon</title>
 <style>
   :root{
@@ -84,7 +88,10 @@ _PAGE = r"""<!doctype html>
   *{box-sizing:border-box}
   body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#26123f 0%,var(--bg) 60%);
        color:var(--ink);font-family:ui-monospace,"JetBrains Mono",SFMono-Regular,Menlo,monospace;
-       min-height:100vh;padding:40px 18px}
+       min-height:100vh;padding:40px 18px;
+       padding-left:max(18px,env(safe-area-inset-left));
+       padding-right:max(18px,env(safe-area-inset-right));
+       padding-bottom:max(40px,env(safe-area-inset-bottom))}
   .shell{max-width:860px;margin:0 auto}
   .brand{display:flex;align-items:center;gap:10px;color:var(--p2);font-weight:700;
          letter-spacing:.5px;font-size:15px;margin-bottom:22px}
@@ -145,6 +152,21 @@ _PAGE = r"""<!doctype html>
   .l-ref{border-left-color:var(--p)} .l-ref .lbl{color:var(--p2)} .l-ref a{color:var(--p2)}
   a{word-break:break-all}
   .foot{margin-top:26px;color:#6d5b90;font-size:11px;line-height:1.6}
+  /* mobile */
+  @media (max-width:560px){
+    body{padding:22px 14px;padding-bottom:max(22px,env(safe-area-inset-bottom))}
+    .prompt{padding:14px}
+    .promptline{flex-wrap:wrap;row-gap:12px}
+    #target{font-size:17px}
+    #scan{width:100%;order:3;padding:13px}
+    .opts{gap:12px}
+    .opt{width:100%}
+    .opt input{width:20px;height:20px}
+    .fhead{gap:8px}
+    .fcat{margin-left:0;width:100%;order:5}
+    .stack{margin-left:0;width:100%;margin-top:2px}
+    .find{padding:13px 14px}
+  }
 </style></head>
 <body>
   <div class="shell">
