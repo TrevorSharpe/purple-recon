@@ -1,4 +1,4 @@
-"""Report rendering for Purple Recon — terminal and HTML output."""
+"""Report rendering for Purple Recon — terminal and purple-themed HTML."""
 
 from __future__ import annotations
 
@@ -6,10 +6,7 @@ import html
 from .scanner import ScanResult
 
 _SEV_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
-_SEV_COLOR = {
-    "high": "\033[91m", "medium": "\033[93m",
-    "low": "\033[96m", "info": "\033[90m",
-}
+_SEV_COLOR = {"high": "\033[91m", "medium": "\033[93m", "low": "\033[96m", "info": "\033[90m"}
 _RESET = "\033[0m"
 _PURPLE = "\033[95m"
 
@@ -19,12 +16,13 @@ def _sorted(result: ScanResult):
 
 
 def to_terminal(result: ScanResult) -> str:
-    out = []
-    out.append(f"{_PURPLE}╔══════════════════════════════════════════════╗{_RESET}")
-    out.append(f"{_PURPLE}║           PURPLE RECON  ·  REPORT            ║{_RESET}")
-    out.append(f"{_PURPLE}╚══════════════════════════════════════════════╝{_RESET}")
-    out.append(f"Target : {result.target}")
-    out.append(f"Started: {result.started}")
+    out = [
+        f"{_PURPLE}╔══════════════════════════════════════════════╗{_RESET}",
+        f"{_PURPLE}║           PURPLE RECON  ·  REPORT            ║{_RESET}",
+        f"{_PURPLE}╚══════════════════════════════════════════════╝{_RESET}",
+        f"Target : {result.target}",
+        f"Started: {result.started}",
+    ]
     if result.software:
         out.append(f"Stack  : {', '.join(result.software)}")
     out.append("")
@@ -32,8 +30,8 @@ def to_terminal(result: ScanResult) -> str:
     counts: dict[str, int] = {}
     for f in result.findings:
         counts[f.severity] = counts.get(f.severity, 0) + 1
-    summary = "  ".join(f"{s}:{counts.get(s,0)}" for s in ("high", "medium", "low", "info"))
-    out.append(f"Findings: {summary}")
+    out.append("Findings: " + "  ".join(f"{s}:{counts.get(s,0)}"
+               for s in ("high", "medium", "low", "info")))
     out.append("─" * 50)
 
     for f in _sorted(result):
@@ -41,24 +39,53 @@ def to_terminal(result: ScanResult) -> str:
         out.append(f"{c}[{f.severity.upper():6}]{_RESET} {f.title}")
         if f.detail:
             out.append(f"          {f.detail}")
+        if f.impact:
+            out.append(f"          {_PURPLE}How it's exploited:{_RESET} {f.impact}")
+        if f.exposed:
+            out.append(f"          {_PURPLE}What's exposed:{_RESET} {f.exposed}")
+        if f.remediation:
+            out.append(f"          {_PURPLE}Fix:{_RESET} {f.remediation}")
         if f.reference:
             out.append(f"          ↳ {f.reference}")
+        out.append("")
     return "\n".join(out)
+
+
+def _block(label: str, value: str, cls: str) -> str:
+    if not value:
+        return ""
+    return (f'<div class="line {cls}"><span class="lbl">{label}</span>'
+            f'{html.escape(value)}</div>')
 
 
 def to_html(result: ScanResult) -> str:
     rows = []
     for f in _sorted(result):
-        ref = (f'<a href="{html.escape(f.reference)}" target="_blank" rel="noopener">'
-               f'{html.escape(f.reference)}</a>') if f.reference else ""
+        ref = (f'<div class="line ref"><span class="lbl">Reference</span>'
+               f'<a href="{html.escape(f.reference)}" target="_blank" rel="noopener">'
+               f'{html.escape(f.reference)}</a></div>') if f.reference else ""
         rows.append(f"""
         <tr class="sev-{f.severity}">
-          <td><span class="badge {f.severity}">{f.severity.upper()}</span></td>
-          <td>{html.escape(f.category)}</td>
-          <td><strong>{html.escape(f.title)}</strong><div class="detail">{html.escape(f.detail)}</div>{ref}</td>
+          <td class="sevcol"><span class="badge {f.severity}">{f.severity.upper()}</span>
+              <div class="cat">{html.escape(f.category)}</div></td>
+          <td>
+            <div class="title">{html.escape(f.title)}</div>
+            <div class="detail">{html.escape(f.detail)}</div>
+            {_block("How it's exploited", f.impact, "impact")}
+            {_block("What's exposed", f.exposed, "exposed")}
+            {_block("Fix", f.remediation, "fix")}
+            {ref}
+          </td>
         </tr>""")
 
     stack = ", ".join(html.escape(s) for s in result.software) or "—"
+    counts: dict[str, int] = {}
+    for f in result.findings:
+        counts[f.severity] = counts.get(f.severity, 0) + 1
+    chips = "".join(
+        f'<span class="chip {s}">{s.upper()} {counts.get(s,0)}</span>'
+        for s in ("high", "medium", "low", "info"))
+
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -72,19 +99,33 @@ def to_html(result: ScanResult) -> str:
            border-bottom:2px solid var(--p); }}
   h1 {{ margin:0; font-size:22px; color:var(--p2); letter-spacing:1px; }}
   .meta {{ margin-top:8px; font-size:13px; color:#b9a7d6; }}
+  .chips {{ margin-top:12px; }}
+  .chip {{ padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; margin-right:6px; }}
+  .chip.high {{ background:#7f1d1d; color:#fecaca; }}
+  .chip.medium {{ background:#78350f; color:#fed7aa; }}
+  .chip.low {{ background:#164e63; color:#a5f3fc; }}
+  .chip.info {{ background:#312e40; color:#c7bcdb; }}
   .wrap {{ padding:24px 32px; }}
   table {{ width:100%; border-collapse:collapse; background:var(--card);
           border:1px solid var(--line); border-radius:10px; overflow:hidden; }}
-  th,td {{ text-align:left; padding:12px 14px; border-bottom:1px solid var(--line);
-          vertical-align:top; font-size:13px; }}
-  th {{ background:#241338; color:var(--p2); text-transform:uppercase; font-size:11px; }}
-  .detail {{ color:#c4b5db; margin:4px 0; font-size:12px; }}
-  a {{ color:var(--p2); word-break:break-all; }}
+  td {{ padding:14px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }}
+  .sevcol {{ width:110px; }}
+  .cat {{ color:#8b7aa8; font-size:10px; margin-top:6px; text-transform:uppercase; }}
+  .title {{ font-weight:700; color:#f3ecff; }}
+  .detail {{ color:#c4b5db; margin:5px 0 8px; font-size:12px; }}
+  .line {{ margin:5px 0; font-size:12px; line-height:1.5; padding-left:10px;
+          border-left:2px solid var(--line); }}
+  .lbl {{ display:inline-block; font-weight:700; margin-right:8px; }}
+  .impact {{ border-left-color:#ef4444; }} .impact .lbl {{ color:#fca5a5; }}
+  .exposed {{ border-left-color:#f59e0b; }} .exposed .lbl {{ color:#fcd34d; }}
+  .fix {{ border-left-color:#22c55e; }} .fix .lbl {{ color:#86efac; }}
+  .ref {{ border-left-color:var(--p); }} .ref .lbl {{ color:var(--p2); }}
   .badge {{ padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }}
   .badge.high {{ background:#7f1d1d; color:#fecaca; }}
   .badge.medium {{ background:#78350f; color:#fed7aa; }}
   .badge.low {{ background:#164e63; color:#a5f3fc; }}
   .badge.info {{ background:#312e40; color:#c7bcdb; }}
+  a {{ color:var(--p2); word-break:break-all; }}
   footer {{ padding:16px 32px; color:#7a6a99; font-size:11px; }}
 </style></head>
 <body>
@@ -92,12 +133,10 @@ def to_html(result: ScanResult) -> str:
     <h1>◆ PURPLE RECON</h1>
     <div class="meta">Target: {html.escape(result.target)} &nbsp;·&nbsp; {html.escape(result.started)}<br>
     Detected stack: {stack}</div>
+    <div class="chips">{chips}</div>
   </header>
   <div class="wrap">
-    <table>
-      <thead><tr><th>Severity</th><th>Category</th><th>Finding</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
+    <table><tbody>{''.join(rows)}</tbody></table>
   </div>
-  <footer>Authorized assessment only. Purple Recon identifies — it does not exploit.</footer>
+  <footer>Authorized assessment only. Purple Recon identifies and explains — it does not exploit.</footer>
 </body></html>"""

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Purple Recon — https://example.com</title>
+<title>Purple Recon — https://demo.local</title>
 <style>
   :root { --bg:#140a1f; --card:#1e1030; --line:#38215a; --p:#a855f7; --p2:#c084fc; }
   * { box-sizing:border-box; }
@@ -11,77 +11,80 @@
            border-bottom:2px solid var(--p); }
   h1 { margin:0; font-size:22px; color:var(--p2); letter-spacing:1px; }
   .meta { margin-top:8px; font-size:13px; color:#b9a7d6; }
+  .chips { margin-top:12px; }
+  .chip { padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; margin-right:6px; }
+  .chip.high { background:#7f1d1d; color:#fecaca; }
+  .chip.medium { background:#78350f; color:#fed7aa; }
+  .chip.low { background:#164e63; color:#a5f3fc; }
+  .chip.info { background:#312e40; color:#c7bcdb; }
   .wrap { padding:24px 32px; }
   table { width:100%; border-collapse:collapse; background:var(--card);
           border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  th,td { text-align:left; padding:12px 14px; border-bottom:1px solid var(--line);
-          vertical-align:top; font-size:13px; }
-  th { background:#241338; color:var(--p2); text-transform:uppercase; font-size:11px; }
-  .detail { color:#c4b5db; margin:4px 0; font-size:12px; }
-  a { color:var(--p2); word-break:break-all; }
+  td { padding:14px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }
+  .sevcol { width:110px; }
+  .cat { color:#8b7aa8; font-size:10px; margin-top:6px; text-transform:uppercase; }
+  .title { font-weight:700; color:#f3ecff; }
+  .detail { color:#c4b5db; margin:5px 0 8px; font-size:12px; }
+  .line { margin:5px 0; font-size:12px; line-height:1.5; padding-left:10px;
+          border-left:2px solid var(--line); }
+  .lbl { display:inline-block; font-weight:700; margin-right:8px; }
+  .impact { border-left-color:#ef4444; } .impact .lbl { color:#fca5a5; }
+  .exposed { border-left-color:#f59e0b; } .exposed .lbl { color:#fcd34d; }
+  .fix { border-left-color:#22c55e; } .fix .lbl { color:#86efac; }
+  .ref { border-left-color:var(--p); } .ref .lbl { color:var(--p2); }
   .badge { padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }
   .badge.high { background:#7f1d1d; color:#fecaca; }
   .badge.medium { background:#78350f; color:#fed7aa; }
   .badge.low { background:#164e63; color:#a5f3fc; }
   .badge.info { background:#312e40; color:#c7bcdb; }
+  a { color:var(--p2); word-break:break-all; }
   footer { padding:16px 32px; color:#7a6a99; font-size:11px; }
 </style></head>
 <body>
   <header>
     <h1>◆ PURPLE RECON</h1>
-    <div class="meta">Target: https://example.com &nbsp;·&nbsp; 2026-09-03T02:41:16.928853+00:00<br>
-    Detected stack: —</div>
+    <div class="meta">Target: https://demo.local &nbsp;·&nbsp; 2026-09-03T02:50:00Z<br>
+    Detected stack: Apache 2.4.49</div>
+    <div class="chips"><span class="chip high">HIGH 3</span><span class="chip medium">MEDIUM 0</span><span class="chip low">LOW 0</span><span class="chip info">INFO 0</span></div>
   </header>
   <div class="wrap">
-    <table>
-      <thead><tr><th>Severity</th><th>Category</th><th>Finding</th></tr></thead>
-      <tbody>
-        <tr class="sev-medium">
-          <td><span class="badge medium">MEDIUM</span></td>
-          <td>headers</td>
-          <td><strong>HSTS not set</strong><div class="detail">Missing HSTS lets clients be downgraded to plaintext HTTP.</div></td>
+    <table><tbody>
+        <tr class="sev-high">
+          <td class="sevcol"><span class="badge high">HIGH</span>
+              <div class="cat">cve</div></td>
+          <td>
+            <div class="title">CVE-2021-41773 affects Apache 2.4.49  [CWE-22]</div>
+            <div class="detail">A flaw was found in a change made to path normalization in Apache HTTP Server 2.4.49. An attacker could use a path traversal attack to map URLs to files outside the directories configured by Alias-like directives. If files outside of these directories are not protected by the usual default configura…</div>
+            <div class="line impact"><span class="lbl">How it's exploited</span>Exploitable remotely over the network, with no prior access. Potential result — full disclosure of data (confidentiality); full tampering with data (integrity); full disruption of service (availability). CVSS vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H.</div>
+            
+            <div class="line fix"><span class="lbl">Fix</span>Upgrade Apache 2.4.49 to a fixed release; review the vendor advisory linked below and apply interim mitigations until patched.</div>
+            <div class="line ref"><span class="lbl">Reference</span><a href="https://nvd.nist.gov/vuln/detail/CVE-2021-41773" target="_blank" rel="noopener">https://nvd.nist.gov/vuln/detail/CVE-2021-41773</a></div>
+          </td>
         </tr>
-        <tr class="sev-medium">
-          <td><span class="badge medium">MEDIUM</span></td>
-          <td>headers</td>
-          <td><strong>No Content-Security-Policy</strong><div class="detail">Absent CSP increases XSS blast radius.</div></td>
+        <tr class="sev-high">
+          <td class="sevcol"><span class="badge high">HIGH</span>
+              <div class="cat">cve</div></td>
+          <td>
+            <div class="title">CVE-2021-42013 affects Apache 2.4.49  [CWE-22]</div>
+            <div class="detail">It was found that the fix for CVE-2021-41773 in Apache HTTP Server 2.4.50 was insufficient. An attacker could use a path traversal attack to map URLs to files outside the directories configured by Alias-like directives. If files outside of these directories are not protected by the usual default con…</div>
+            <div class="line impact"><span class="lbl">How it's exploited</span>Exploitable remotely over the network, with no prior access. Potential result — full disclosure of data (confidentiality); full tampering with data (integrity); full disruption of service (availability). CVSS vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H.</div>
+            
+            <div class="line fix"><span class="lbl">Fix</span>Upgrade Apache 2.4.49 to a fixed release; review the vendor advisory linked below and apply interim mitigations until patched.</div>
+            <div class="line ref"><span class="lbl">Reference</span><a href="https://nvd.nist.gov/vuln/detail/CVE-2021-42013" target="_blank" rel="noopener">https://nvd.nist.gov/vuln/detail/CVE-2021-42013</a></div>
+          </td>
         </tr>
-        <tr class="sev-low">
-          <td><span class="badge low">LOW</span></td>
-          <td>headers</td>
-          <td><strong>X-Frame-Options missing</strong><div class="detail">Page may be framed (clickjacking) if CSP frame-ancestors also absent.</div></td>
-        </tr>
-        <tr class="sev-low">
-          <td><span class="badge low">LOW</span></td>
-          <td>headers</td>
-          <td><strong>X-Content-Type-Options missing</strong><div class="detail">MIME-sniffing not disabled (set to &#x27;nosniff&#x27;).</div></td>
-        </tr>
-        <tr class="sev-info">
-          <td><span class="badge info">INFO</span></td>
-          <td>recon</td>
-          <td><strong>HTTP 200 from https://example.com/</strong><div class="detail">Final URL after redirects: https://example.com/</div></td>
-        </tr>
-        <tr class="sev-info">
-          <td><span class="badge info">INFO</span></td>
-          <td>fingerprint</td>
-          <td><strong>Server header</strong><div class="detail">cloudflare</div></td>
-        </tr>
-        <tr class="sev-info">
-          <td><span class="badge info">INFO</span></td>
-          <td>headers</td>
-          <td><strong>Referrer-Policy missing</strong><div class="detail">Referrer data may leak to third parties.</div></td>
-        </tr>
-        <tr class="sev-info">
-          <td><span class="badge info">INFO</span></td>
-          <td>tls</td>
-          <td><strong>TLS protocol</strong><div class="detail">TLSv1.3 / TLS_AES_256_GCM_SHA384</div></td>
-        </tr>
-        <tr class="sev-info">
-          <td><span class="badge info">INFO</span></td>
-          <td>tls</td>
-          <td><strong>Certificate valid</strong><div class="detail">Expires in 29 days (Oct  2 20:44:22 2026 GMT).</div></td>
-        </tr></tbody>
-    </table>
+        <tr class="sev-high">
+          <td class="sevcol"><span class="badge high">HIGH</span>
+              <div class="cat">exposure</div></td>
+          <td>
+            <div class="title">Accessible: /.env</div>
+            <div class="detail">An environment/secrets file is web-accessible.</div>
+            <div class="line impact"><span class="lbl">How it's exploited</span>These files typically hold database passwords, API keys, and app secrets.</div>
+            <div class="line exposed"><span class="lbl">What's exposed</span>HTTP 200, 96 bytes at /.env — 4 variables exposed (values redacted): DB_HOST, DB_PASSWORD, API_KEY, DEBUG | Sensitive names to rotate: DB_PASSWORD, API_KEY</div>
+            <div class="line fix"><span class="lbl">Fix</span>Deny web access to dotfiles; rotate every exposed secret immediately.</div>
+            <div class="line ref"><span class="lbl">Reference</span><a href="https://demo.local/.env" target="_blank" rel="noopener">https://demo.local/.env</a></div>
+          </td>
+        </tr></tbody></table>
   </div>
-  <footer>Authorized assessment only. Purple Recon identifies — it does not exploit.</footer>
+  <footer>Authorized assessment only. Purple Recon identifies and explains — it does not exploit.</footer>
 </body></html>

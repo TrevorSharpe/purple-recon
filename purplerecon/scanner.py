@@ -3,14 +3,17 @@
 Purple Recon — Web Vulnerability Assessment Scanner
 
 A NON-DESTRUCTIVE reconnaissance and vulnerability-identification tool.
-It fingerprints a target, audits its security posture, and correlates
-detected software against the NVD (National Vulnerability Database).
+For every finding it reports:
+  • Impact       — what an attacker could achieve (attack scenario, not a payload)
+  • Exposed      — the actual information observed to be leaking (secrets redacted)
+  • Remediation  — the concrete fix
 
-It does NOT exploit anything. It identifies attack surface and known
-vulnerabilities so a human can investigate them under proper authorization.
+It IDENTIFIES and EXPLAINS. It does not run exploits, deliver payloads, dump
+your files, or reconstruct your data. Findings are for a human to fix under
+proper authorization.
 
 AUTHORIZED USE ONLY. Only scan systems you own or have explicit written
-permission to test. Unauthorized scanning may be illegal in your jurisdiction.
+permission to test.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from urllib.parse import urlparse
 import requests
 from requests.exceptions import RequestException
 
-USER_AGENT = "PurpleRecon/1.0 (+authorized-assessment)"
+USER_AGENT = "PurpleRecon/1.1 (+authorized-assessment)"
 TIMEOUT = 10
 
 
@@ -39,6 +42,9 @@ class Finding:
     title: str
     severity: str  # info | low | medium | high
     detail: str
+    impact: str = ""        # how it can be exploited / what an attacker gains
+    exposed: str = ""       # the actual information observed leaking (redacted)
+    remediation: str = ""   # how to fix it
     reference: str = ""
 
 
@@ -56,48 +62,33 @@ class ScanResult:
 # --------------------------------------------------------------------------- #
 # HTTP probing + fingerprinting
 # --------------------------------------------------------------------------- #
-# header/body signatures -> friendly software name used for CVE correlation
 _SERVER_RE = re.compile(r"^([A-Za-z0-9_\-\.]+)/([0-9][0-9A-Za-z\.\-]*)")
 
-_TECH_SIGNATURES = [
-    ("x-powered-by", None, "X-Powered-By header"),
-    ("x-aspnet-version", None, "ASP.NET version"),
-    ("x-generator", None, "Generator"),
+_TECH_HEADERS = [
+    ("x-powered-by", "X-Powered-By header"),
+    ("x-aspnet-version", "ASP.NET version"),
+    ("x-generator", "Generator"),
 ]
 
 _BODY_SIGNATURES = [
     (re.compile(r'name="generator" content="WordPress ([0-9.]+)"', re.I), "WordPress {0}"),
     (re.compile(r"/wp-content/", re.I), "WordPress"),
     (re.compile(r'name="generator" content="Joomla', re.I), "Joomla"),
-    (re.compile(r"Drupal.settings", re.I), "Drupal"),
     (re.compile(r'name="generator" content="Drupal ([0-9.]+)', re.I), "Drupal {0}"),
 ]
 
 
 def probe(url: str, result: ScanResult) -> requests.Response | None:
     try:
-        resp = requests.get(
-            url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT,
-            allow_redirects=True,
-            verify=True,
-        )
+        resp = requests.get(url, headers={"User-Agent": USER_AGENT},
+                            timeout=TIMEOUT, allow_redirects=True, verify=True)
     except RequestException as e:
-        result.add(
-            category="connectivity",
-            title="Target unreachable",
-            severity="info",
-            detail=f"Could not complete request: {e}",
-        )
+        result.add(category="connectivity", title="Target unreachable",
+                   severity="info", detail=f"Could not complete request: {e}")
         return None
 
-    result.add(
-        category="recon",
-        title=f"HTTP {resp.status_code} from {resp.url}",
-        severity="info",
-        detail=f"Final URL after redirects: {resp.url}",
-    )
+    result.add(category="recon", title=f"HTTP {resp.status_code} from {resp.url}",
+               severity="info", detail=f"Final URL after redirects: {resp.url}")
     return resp
 
 
@@ -106,24 +97,32 @@ def fingerprint(resp: requests.Response, result: ScanResult) -> None:
 
     server = headers.get("Server", "")
     if server:
-        result.add(
-            category="fingerprint",
-            title="Server header",
-            severity="info",
-            detail=server,
-        )
         m = _SERVER_RE.match(server)
+        versioned = bool(m)
+        result.add(
+            category="fingerprint", title="Server header",
+            severity="low" if versioned else "info", detail=server,
+            impact=("The exact server software and version are advertised, letting an "
+                    "attacker skip reconnaissance and look up version-specific exploits "
+                    "for this host.") if versioned else "",
+            exposed=server if versioned else "",
+            remediation=("Suppress version details — Apache 'ServerTokens Prod', "
+                         "nginx 'server_tokens off'.") if versioned else "",
+        )
         if m:
             result.software.append(f"{m.group(1)} {m.group(2)}")
 
-    for hdr, _, label in _TECH_SIGNATURES:
+    for hdr, label in _TECH_HEADERS:
         val = headers.get(hdr)
         if val:
             result.add(
-                category="fingerprint",
-                title=label,
-                severity="info",
+                category="fingerprint", title=f"Stack disclosure: {label}", severity="low",
                 detail=val,
+                impact="Reveals the technology and version behind the site, narrowing an "
+                       "attacker's search to exploits known to affect this exact stack.",
+                exposed=f"{hdr}: {val}",
+                remediation="Remove or blank this header (PHP 'expose_php=Off', or strip "
+                            "it at the reverse proxy).",
             )
             m = _SERVER_RE.match(val)
             if m:
@@ -136,52 +135,67 @@ def fingerprint(resp: requests.Response, result: ScanResult) -> None:
         m = rx.search(body)
         if m:
             name = tmpl.format(*m.groups()) if m.groups() else tmpl
-            result.add(
-                category="fingerprint",
-                title="Technology detected",
-                severity="info",
-                detail=name,
-            )
+            result.add(category="fingerprint", title="Technology detected",
+                       severity="info", detail=name)
             if any(c.isdigit() for c in name):
                 result.software.append(name)
 
-    # de-dup while preserving order
     seen: set[str] = set()
     result.software = [s for s in result.software if not (s in seen or seen.add(s))]
 
 
 # --------------------------------------------------------------------------- #
-# Security header audit
+# Security header audit  (impact + remediation)
 # --------------------------------------------------------------------------- #
 _SECURITY_HEADERS = {
-    "strict-transport-security": ("HSTS not set", "medium",
-        "Missing HSTS lets clients be downgraded to plaintext HTTP."),
-    "content-security-policy": ("No Content-Security-Policy", "medium",
-        "Absent CSP increases XSS blast radius."),
-    "x-frame-options": ("X-Frame-Options missing", "low",
-        "Page may be framed (clickjacking) if CSP frame-ancestors also absent."),
-    "x-content-type-options": ("X-Content-Type-Options missing", "low",
-        "MIME-sniffing not disabled (set to 'nosniff')."),
-    "referrer-policy": ("Referrer-Policy missing", "info",
-        "Referrer data may leak to third parties."),
+    "strict-transport-security": (
+        "HSTS not set", "medium",
+        "Browsers may connect over plaintext HTTP at least once.",
+        "An on-path attacker (public Wi-Fi, rogue router) can strip TLS and silently "
+        "downgrade the session to HTTP, then read or modify traffic including session "
+        "cookies and login credentials.",
+        "Send: Strict-Transport-Security: max-age=63072000; includeSubDomains; preload",
+    ),
+    "content-security-policy": (
+        "No Content-Security-Policy", "medium",
+        "No policy restricting where scripts/styles may load from.",
+        "If any XSS flaw exists, injected JavaScript runs unrestricted — enabling "
+        "session-cookie theft, keylogging of login forms, and full page takeover in "
+        "the victim's browser.",
+        "Define a CSP limiting script/style/frame sources; roll out with "
+        "Content-Security-Policy-Report-Only first to catch breakage.",
+    ),
+    "x-frame-options": (
+        "X-Frame-Options missing", "low",
+        "Page may be embeddable in a frame.",
+        "The page can be loaded invisibly over an attacker's site so a victim's clicks "
+        "land on hidden controls (clickjacking) — e.g. tricking them into changing a "
+        "setting or confirming an action.",
+        "Set X-Frame-Options: DENY (or SAMEORIGIN), or CSP frame-ancestors 'self'.",
+    ),
+    "x-content-type-options": (
+        "X-Content-Type-Options missing", "low",
+        "MIME-type sniffing is not disabled.",
+        "A browser may reinterpret an uploaded or user-controlled file as a different "
+        "type and execute it as script, turning a benign upload into stored XSS.",
+        "Set X-Content-Type-Options: nosniff.",
+    ),
+    "referrer-policy": (
+        "Referrer-Policy missing", "info",
+        "Full referrer URLs may be shared cross-site.",
+        "URLs containing session tokens, reset links, or internal paths can leak to "
+        "third-party sites via the Referer header.",
+        "Set Referrer-Policy: strict-origin-when-cross-origin (or no-referrer).",
+    ),
 }
 
 
 def audit_headers(resp: requests.Response, result: ScanResult) -> None:
     present = {k.lower() for k in resp.headers}
-    for hdr, (title, sev, detail) in _SECURITY_HEADERS.items():
+    for hdr, (title, sev, detail, impact, fix) in _SECURITY_HEADERS.items():
         if hdr not in present:
-            result.add(category="headers", title=title, severity=sev, detail=detail)
-
-    # info-leak headers
-    for leaky in ("x-powered-by", "x-aspnet-version", "x-aspnetmvc-version"):
-        if leaky in present:
-            result.add(
-                category="headers",
-                title=f"Information disclosure via {leaky}",
-                severity="low",
-                detail=f"'{resp.headers.get(leaky)}' reveals stack details useful to attackers.",
-            )
+            result.add(category="headers", title=title, severity=sev,
+                       detail=detail, impact=impact, remediation=fix)
 
 
 # --------------------------------------------------------------------------- #
@@ -192,19 +206,22 @@ def inspect_tls(host: str, port: int, result: ScanResult) -> None:
     try:
         with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as tls:
-                proto = tls.version()
-                cipher = tls.cipher()
-                cert = tls.getpeercert()
+                proto, cipher, cert = tls.version(), tls.cipher(), tls.getpeercert()
     except (ssl.SSLError, socket.error, OSError) as e:
         result.add(category="tls", title="TLS check failed", severity="info", detail=str(e))
         return
 
     result.add(category="tls", title="TLS protocol", severity="info",
-               detail=f"{proto} / {cipher[0] if cipher else '?'}")
+               detail=f"{proto} / {cipher[0] if cipher else '?'}", exposed=proto)
 
     if proto in ("TLSv1", "TLSv1.1", "SSLv3"):
-        result.add(category="tls", title=f"Weak TLS protocol: {proto}",
-                   severity="high", detail="Deprecated protocol should be disabled.")
+        result.add(
+            category="tls", title=f"Weak TLS protocol: {proto}", severity="high",
+            detail="A deprecated protocol version is accepted.", exposed=proto,
+            impact="These protocols have known cryptographic weaknesses (e.g. BEAST, "
+                   "POODLE) that can let an attacker decrypt or tamper with the session.",
+            remediation="Disable SSLv3 / TLS 1.0 / TLS 1.1; require TLS 1.2 or 1.3.",
+        )
 
     not_after = cert.get("notAfter") if cert else None
     if not_after:
@@ -213,10 +230,14 @@ def inspect_tls(host: str, port: int, result: ScanResult) -> None:
             days = (exp - datetime.now(timezone.utc)).days
             if days < 0:
                 result.add(category="tls", title="Certificate expired", severity="high",
-                           detail=f"Expired {abs(days)} days ago ({not_after}).")
+                           detail=f"Expired {abs(days)} days ago ({not_after}).",
+                           impact="Visitors get security warnings and may be trained to click "
+                                  "through them, making a man-in-the-middle attack easier.",
+                           remediation="Renew now and automate renewal (ACME / Let's Encrypt).")
             elif days < 21:
                 result.add(category="tls", title="Certificate expiring soon", severity="medium",
-                           detail=f"Expires in {days} days ({not_after}).")
+                           detail=f"Expires in {days} days ({not_after}).",
+                           remediation="Renew before expiry; automate with ACME.")
             else:
                 result.add(category="tls", title="Certificate valid", severity="info",
                            detail=f"Expires in {days} days ({not_after}).")
@@ -225,52 +246,115 @@ def inspect_tls(host: str, port: int, result: ScanResult) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Non-destructive content discovery (GET only, common exposed paths)
+# Non-destructive exposure discovery (GET only)
 # --------------------------------------------------------------------------- #
-_SENSITIVE_PATHS = [
-    ("/.git/config", "high", "Exposed .git repository — source/history may be downloadable."),
-    ("/.env", "high", "Exposed environment file — often contains secrets."),
-    ("/.svn/entries", "medium", "Exposed SVN metadata."),
-    ("/server-status", "medium", "Apache server-status exposed."),
-    ("/phpinfo.php", "medium", "phpinfo() exposes full config."),
-    ("/.well-known/security.txt", "info", "security.txt present (good practice)."),
-    ("/robots.txt", "info", "robots.txt present."),
-    ("/backup.zip", "medium", "Possible exposed backup archive."),
-    ("/.DS_Store", "low", "Exposed .DS_Store may leak directory names."),
-]
+# path -> (severity, detail, impact, remediation)
+_SENSITIVE_PATHS = {
+    "/.git/config": ("high",
+        "Version-control metadata is web-accessible.",
+        "The source repository and its full history can be reconstructed offline, "
+        "commonly revealing hardcoded credentials, API keys, and internal logic.",
+        "Block access to /.git in the server config, or keep the working tree outside "
+        "the web root. Rotate any secrets that were ever committed."),
+    "/.env": ("high",
+        "An environment/secrets file is web-accessible.",
+        "These files typically hold database passwords, API keys, and app secrets — "
+        "reading it can directly compromise connected services.",
+        "Deny web access to dotfiles, move secrets out of the web root, and rotate "
+        "every exposed secret immediately."),
+    "/.svn/entries": ("medium",
+        "Subversion metadata is exposed.",
+        "Repository structure and file paths can be recovered to guide further attacks.",
+        "Block /.svn in the web server configuration."),
+    "/server-status": ("medium",
+        "Apache server-status page is exposed.",
+        "Live requests, client IPs, and internal URLs are visible — valuable "
+        "reconnaissance for targeting other users and hidden endpoints.",
+        "Restrict mod_status to localhost or authenticated admins."),
+    "/phpinfo.php": ("medium",
+        "A phpinfo() page is exposed.",
+        "Full PHP configuration, absolute paths, and loaded modules are revealed, "
+        "giving an attacker a precise map for targeted attacks.",
+        "Delete phpinfo() files from production."),
+    "/backup.zip": ("medium",
+        "A backup archive is web-accessible.",
+        "Backups often contain complete source code and database dumps — a single "
+        "download can hand over the whole application.",
+        "Remove backups from web-accessible directories; store them off-host."),
+    "/.DS_Store": ("low",
+        "A macOS .DS_Store file is exposed.",
+        "It leaks directory and file names, helping an attacker discover hidden or "
+        "unlinked content.",
+        "Prevent .DS_Store from being deployed; block dotfiles at the web server."),
+    "/.well-known/security.txt": ("info",
+        "security.txt is present (good practice).", "", ""),
+    "/robots.txt": ("info", "robots.txt is present.", "", ""),
+}
+
+_SECRET_KEY_RE = re.compile(r"(PASS|PASSWORD|SECRET|TOKEN|APIKEY|API_KEY|KEY|PRIVATE|"
+                            r"CREDENTIAL|AUTH|DSN|DATABASE_URL)", re.I)
+_ENV_LINE_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", re.M)
+
+
+def _redacted_secret_summary(text: str) -> str:
+    """Report variable NAMES present in an env-like file. Values are never shown."""
+    names = _ENV_LINE_RE.findall(text[:8192])
+    if not names:
+        return ""
+    uniq: list[str] = []
+    for n in names:
+        if n not in uniq:
+            uniq.append(n)
+    sensitive = [n for n in uniq if _SECRET_KEY_RE.search(n)]
+    parts = [f"{len(uniq)} variables exposed (values redacted): " + ", ".join(uniq[:12])]
+    if sensitive:
+        parts.append("Sensitive names to rotate: " + ", ".join(sensitive[:12]))
+    return " | ".join(parts)
 
 
 def discover_paths(base: str, result: ScanResult) -> None:
     parsed = urlparse(base)
     root = f"{parsed.scheme}://{parsed.netloc}"
-    for path, sev, detail in _SENSITIVE_PATHS:
+    for path, (sev, detail, impact, fix) in _SENSITIVE_PATHS.items():
         try:
             r = requests.get(root + path, headers={"User-Agent": USER_AGENT},
                              timeout=TIMEOUT, allow_redirects=False)
         except RequestException:
             continue
         if r.status_code == 200 and len(r.content) > 0:
-            result.add(category="exposure", title=f"Accessible: {path}",
-                       severity=sev, detail=detail, reference=root + path)
-        time.sleep(0.15)  # be polite
+            exposed = f"HTTP 200, {len(r.content)} bytes at {path}"
+            if path.endswith(".env"):
+                summary = _redacted_secret_summary(r.text)
+                if summary:
+                    exposed += " — " + summary
+            result.add(category="exposure", title=f"Accessible: {path}", severity=sev,
+                       detail=detail, impact=impact, exposed=exposed,
+                       remediation=fix, reference=root + path)
+        time.sleep(0.15)
 
 
 # --------------------------------------------------------------------------- #
-# CVE correlation via NVD 2.0 (keyless; rate-limited)
+# CVE correlation via NVD 2.0  (impact derived from authoritative CVSS/CWE data)
 # --------------------------------------------------------------------------- #
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+
+_AV_TEXT = {
+    "NETWORK": "remotely over the network, with no prior access",
+    "ADJACENT_NETWORK": "from the adjacent network segment",
+    "LOCAL": "with local access to the host",
+    "PHYSICAL": "with physical access to the device",
+}
+_IMPACT_TEXT = {"HIGH": "full", "LOW": "partial", "NONE": "no",
+                "COMPLETE": "full", "PARTIAL": "partial"}
 
 
 def correlate_cves(result: ScanResult, max_per_product: int = 5) -> None:
     for sw in result.software:
         keyword = sw.replace("/", " ").strip()
         try:
-            r = requests.get(
-                NVD_API,
-                params={"keywordSearch": keyword, "resultsPerPage": max_per_product},
-                headers={"User-Agent": USER_AGENT},
-                timeout=20,
-            )
+            r = requests.get(NVD_API,
+                             params={"keywordSearch": keyword, "resultsPerPage": max_per_product},
+                             headers={"User-Agent": USER_AGENT}, timeout=20)
             if r.status_code != 200:
                 continue
             data = r.json()
@@ -282,32 +366,60 @@ def correlate_cves(result: ScanResult, max_per_product: int = 5) -> None:
             cid = cve.get("id", "CVE-?")
             descs = cve.get("descriptions", [])
             desc = next((d["value"] for d in descs if d.get("lang") == "en"), "")
-            metrics = cve.get("metrics", {})
-            score, sev = _cvss(metrics)
+            cvss, sev = _cvss(cve.get("metrics", {}))
+            cwe = _cwe(cve.get("weaknesses", []))
+
             result.add(
                 category="cve",
-                title=f"{cid} affects {sw}",
+                title=f"{cid} affects {sw}" + (f"  [{cwe}]" if cwe else ""),
                 severity=sev,
-                detail=(desc[:280] + "…") if len(desc) > 280 else desc,
+                detail=(desc[:300] + "…") if len(desc) > 300 else desc,
+                impact=_impact_sentence(cvss),
+                remediation=f"Upgrade {sw} to a fixed release; review the vendor advisory "
+                            f"linked below and apply interim mitigations until patched.",
                 reference=f"https://nvd.nist.gov/vuln/detail/{cid}",
             )
         time.sleep(1.0)  # respect keyless NVD rate limit
 
 
-def _cvss(metrics: dict) -> tuple[float, str]:
+def _cvss(metrics: dict) -> tuple[dict, str]:
     for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
         arr = metrics.get(key)
         if arr:
             data = arr[0].get("cvssData", {})
             score = data.get("baseScore", 0.0)
-            if score >= 9:
-                return score, "high"
-            if score >= 7:
-                return score, "high"
-            if score >= 4:
-                return score, "medium"
-            return score, "low"
-    return 0.0, "info"
+            sev = "high" if score >= 7 else "medium" if score >= 4 else "low"
+            return data, sev
+    return {}, "info"
+
+
+def _cwe(weaknesses: list) -> str:
+    for w in weaknesses:
+        for d in w.get("description", []):
+            v = d.get("value", "")
+            if v.startswith("CWE-") and v != "CWE-noinfo":
+                return v
+    return ""
+
+
+def _impact_sentence(cvss: dict) -> str:
+    if not cvss:
+        return ""
+    av = cvss.get("attackVector") or cvss.get("accessVector", "")
+    where = _AV_TEXT.get(av, "under the conditions in the CVSS vector")
+    c = _IMPACT_TEXT.get(cvss.get("confidentialityImpact", ""))
+    i = _IMPACT_TEXT.get(cvss.get("integrityImpact", ""))
+    a = _IMPACT_TEXT.get(cvss.get("availabilityImpact", ""))
+    cons = []
+    if c and c != "no":
+        cons.append(f"{c} disclosure of data (confidentiality)")
+    if i and i != "no":
+        cons.append(f"{i} tampering with data (integrity)")
+    if a and a != "no":
+        cons.append(f"{a} disruption of service (availability)")
+    result_txt = "; ".join(cons) if cons else "impact per the CVSS vector"
+    vec = cvss.get("vectorString", "")
+    return f"Exploitable {where}. Potential result — {result_txt}. CVSS vector: {vec}."
 
 
 # --------------------------------------------------------------------------- #
@@ -316,7 +428,6 @@ def _cvss(metrics: dict) -> tuple[float, str]:
 def run_scan(target: str, do_paths: bool = True, do_cve: bool = True) -> ScanResult:
     if not target.startswith(("http://", "https://")):
         target = "https://" + target
-
     result = ScanResult(target=target, started=datetime.now(timezone.utc).isoformat())
 
     resp = probe(target, result)
@@ -329,10 +440,8 @@ def run_scan(target: str, do_paths: bool = True, do_cve: bool = True) -> ScanRes
     parsed = urlparse(str(resp.url))
     if parsed.scheme == "https":
         inspect_tls(parsed.hostname, parsed.port or 443, result)
-
     if do_paths:
         discover_paths(str(resp.url), result)
     if do_cve and result.software:
         correlate_cves(result)
-
     return result
