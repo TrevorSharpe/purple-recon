@@ -59,6 +59,9 @@ exposed to your network. The page is responsive and works on a phone.
 **On iPhone?** See [MOBILE.md](MOBILE.md) — run it on-device with iSH, or run
 it on another machine and reach it privately from the phone.
 
+**No install at all?** See [CODESPACES.md](CODESPACES.md) — run it in a GitHub
+Codespace and open the forwarded URL in any browser, including your phone.
+
 
 ## Speed
 
