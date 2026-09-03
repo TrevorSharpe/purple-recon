@@ -20,17 +20,30 @@ from __future__ import annotations
 
 import re
 import ssl
+import json
+import os
 import socket
+import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
 from requests.exceptions import RequestException
 
-USER_AGENT = "PurpleRecon/1.1 (+authorized-assessment)"
+USER_AGENT = "PurpleRecon/1.3 (+authorized-assessment)"
 TIMEOUT = 10
+
+# One pooled session so repeated requests to the same host reuse the TCP/TLS
+# connection instead of doing a fresh handshake every time (big latency win).
+_SESSION = requests.Session()
+_ADAPTER = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=0)
+_SESSION.mount("http://", _ADAPTER)
+_SESSION.mount("https://", _ADAPTER)
+_SESSION.headers.update({"User-Agent": USER_AGENT})
 
 
 # --------------------------------------------------------------------------- #
@@ -54,6 +67,7 @@ class Finding:
 class ScanResult:
     target: str
     started: str
+    observed_url: str = ""  # final URL after redirects (where findings were seen)
     software: list[str] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
 
@@ -82,13 +96,13 @@ _BODY_SIGNATURES = [
 
 def probe(url: str, result: ScanResult) -> requests.Response | None:
     try:
-        resp = requests.get(url, headers={"User-Agent": USER_AGENT},
-                            timeout=TIMEOUT, allow_redirects=True, verify=True)
+        resp = _SESSION.get(url, timeout=TIMEOUT, allow_redirects=True, verify=True)
     except RequestException as e:
         result.add(category="connectivity", title="Target unreachable", location=url,
                    severity="info", detail=f"Could not complete request: {e}")
         return None
 
+    result.observed_url = str(resp.url)
     result.add(category="recon", title=f"HTTP {resp.status_code} from {resp.url}",
                severity="info", location=str(resp.url),
                detail=f"Final URL after redirects: {resp.url}")
@@ -321,22 +335,33 @@ def _redacted_secret_summary(text: str) -> str:
 def discover_paths(base: str, result: ScanResult) -> None:
     parsed = urlparse(base)
     root = f"{parsed.scheme}://{parsed.netloc}"
-    for path, (sev, detail, impact, fix) in _SENSITIVE_PATHS.items():
+
+    def check(item):
+        path, meta = item
         try:
-            r = requests.get(root + path, headers={"User-Agent": USER_AGENT},
-                             timeout=TIMEOUT, allow_redirects=False)
+            r = _SESSION.get(root + path, timeout=6, allow_redirects=False)
         except RequestException:
-            continue
+            return None
         if r.status_code == 200 and len(r.content) > 0:
-            exposed = f"HTTP 200, {len(r.content)} bytes at {path}"
-            if path.endswith(".env"):
-                summary = _redacted_secret_summary(r.text)
-                if summary:
-                    exposed += " — " + summary
-            result.add(category="exposure", title=f"Accessible: {path}", severity=sev,
-                       detail=detail, impact=impact, exposed=exposed,
-                       remediation=fix, location=root + path)
-        time.sleep(0.15)
+            return path, meta, r
+        return None
+
+    # Fire all path probes in parallel over the pooled connection.
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        hits = list(ex.map(check, _SENSITIVE_PATHS.items()))
+
+    for hit in hits:
+        if not hit:
+            continue
+        path, (sev, detail, impact, fix), r = hit
+        exposed = f"HTTP 200, {len(r.content)} bytes at {path}"
+        if path.endswith(".env"):
+            summary = _redacted_secret_summary(r.text)
+            if summary:
+                exposed += " — " + summary
+        result.add(category="exposure", title=f"Accessible: {path}", severity=sev,
+                   detail=detail, impact=impact, exposed=exposed,
+                   remediation=fix, location=root + path)
 
 
 # --------------------------------------------------------------------------- #
@@ -354,40 +379,78 @@ _IMPACT_TEXT = {"HIGH": "full", "LOW": "partial", "NONE": "no",
                 "COMPLETE": "full", "PARTIAL": "partial"}
 
 
+# NVD results are cached on disk so repeat scans of the same software are instant.
+_CACHE_PATH = os.path.join(tempfile.gettempdir(), "purplerecon_nvd_cache.json")
+_CACHE_TTL = 7 * 24 * 3600  # 7 days
+
+
+def _load_cache() -> dict:
+    try:
+        with open(_CACHE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_cache(cache: dict) -> None:
+    try:
+        with open(_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
+
+
+def _fetch_cves_for(sw: str, max_per_product: int) -> list[dict]:
+    """Query NVD for one software string; return finding-field dicts (no location)."""
+    keyword = sw.replace("/", " ").strip()
+    try:
+        r = _SESSION.get(NVD_API,
+                         params={"keywordSearch": keyword, "resultsPerPage": max_per_product},
+                         timeout=15)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+    except (RequestException, ValueError):
+        return []
+
+    out: list[dict] = []
+    for item in data.get("vulnerabilities", []):
+        cve = item.get("cve", {})
+        cid = cve.get("id", "CVE-?")
+        descs = cve.get("descriptions", [])
+        desc = next((d["value"] for d in descs if d.get("lang") == "en"), "")
+        cvss, sev = _cvss(cve.get("metrics", {}))
+        cwe = _cwe(cve.get("weaknesses", []))
+        out.append({
+            "title": f"{cid} affects {sw}" + (f"  [{cwe}]" if cwe else ""),
+            "severity": sev,
+            "detail": (desc[:300] + "…") if len(desc) > 300 else desc,
+            "impact": _impact_sentence(cvss),
+            "component": _affected_component(desc, cwe),
+            "remediation": f"Upgrade {sw} to a fixed release; review the vendor advisory "
+                           f"linked below and apply interim mitigations until patched.",
+            "reference": f"https://nvd.nist.gov/vuln/detail/{cid}",
+        })
+    return out
+
+
 def correlate_cves(result: ScanResult, observed_url: str, max_per_product: int = 5) -> None:
+    cache = _load_cache()
+    now = time.time()
+    dirty = False
     for sw in result.software:
-        keyword = sw.replace("/", " ").strip()
-        try:
-            r = requests.get(NVD_API,
-                             params={"keywordSearch": keyword, "resultsPerPage": max_per_product},
-                             headers={"User-Agent": USER_AGENT}, timeout=20)
-            if r.status_code != 200:
-                continue
-            data = r.json()
-        except (RequestException, ValueError):
-            continue
-
-        for item in data.get("vulnerabilities", []):
-            cve = item.get("cve", {})
-            cid = cve.get("id", "CVE-?")
-            descs = cve.get("descriptions", [])
-            desc = next((d["value"] for d in descs if d.get("lang") == "en"), "")
-            cvss, sev = _cvss(cve.get("metrics", {}))
-            cwe = _cwe(cve.get("weaknesses", []))
-
-            result.add(
-                category="cve",
-                title=f"{cid} affects {sw}" + (f"  [{cwe}]" if cwe else ""),
-                severity=sev,
-                detail=(desc[:300] + "…") if len(desc) > 300 else desc,
-                location=observed_url,
-                impact=_impact_sentence(cvss),
-                component=_affected_component(desc, cwe),
-                remediation=f"Upgrade {sw} to a fixed release; review the vendor advisory "
-                            f"linked below and apply interim mitigations until patched.",
-                reference=f"https://nvd.nist.gov/vuln/detail/{cid}",
-            )
-        time.sleep(1.0)  # respect keyless NVD rate limit
+        entry = cache.get(sw)
+        if entry and now - entry.get("ts", 0) < _CACHE_TTL:
+            findings = entry["findings"]
+        else:
+            findings = _fetch_cves_for(sw, max_per_product)
+            cache[sw] = {"ts": now, "findings": findings}
+            dirty = True
+            time.sleep(0.6)  # polite to keyless NVD only on a cache miss
+        for d in findings:
+            result.add(category="cve", location=observed_url, **d)
+    if dirty:
+        _save_cache(cache)
 
 
 def _cvss(metrics: dict) -> tuple[dict, str]:
@@ -498,13 +561,19 @@ def _impact_sentence(cvss: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
-def run_scan(target: str, do_paths: bool = True, do_cve: bool = True) -> ScanResult:
+def run_fast_scan(target: str, do_paths: bool = True) -> ScanResult:
+    """Everything except CVE correlation, with TLS + path checks in parallel.
+
+    This is the phase that should feel instant; CVE correlation (the slow NVD
+    call) is done separately via correlate_cves so it never blocks these results.
+    """
     if not target.startswith(("http://", "https://")):
         target = "https://" + target
     result = ScanResult(target=target, started=datetime.now(timezone.utc).isoformat())
 
     resp = probe(target, result)
     if resp is None:
+        result.findings = [f for f in result.findings if f.location]
         return result
 
     fingerprint(resp, result)
@@ -512,14 +581,23 @@ def run_scan(target: str, do_paths: bool = True, do_cve: bool = True) -> ScanRes
 
     observed = str(resp.url)
     parsed = urlparse(observed)
-    if parsed.scheme == "https":
-        inspect_tls(parsed.hostname, parsed.port or 443, result, observed)
-    if do_paths:
-        discover_paths(observed, result)
-    if do_cve and result.software:
-        correlate_cves(result, observed)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futures = []
+        if parsed.scheme == "https":
+            futures.append(ex.submit(inspect_tls, parsed.hostname, parsed.port or 443,
+                                     result, observed))
+        if do_paths:
+            futures.append(ex.submit(discover_paths, observed, result))
+        for fut in futures:
+            fut.result()
 
-    # Requirement: every reported finding must have a URL where it was observed.
-    # Drop anything without a location so the report can't contain locationless items.
     result.findings = [f for f in result.findings if f.location]
+    return result
+
+
+def run_scan(target: str, do_paths: bool = True, do_cve: bool = True) -> ScanResult:
+    """Full blocking scan (used by the CLI): fast phase + CVE correlation."""
+    result = run_fast_scan(target, do_paths=do_paths)
+    if do_cve and result.software and result.observed_url:
+        correlate_cves(result, result.observed_url)
     return result

@@ -18,7 +18,7 @@ from dataclasses import asdict
 
 from flask import Flask, request, jsonify, Response
 
-from .scanner import run_scan
+from .scanner import run_fast_scan, correlate_cves, ScanResult
 
 app = Flask(__name__)
 
@@ -32,6 +32,7 @@ def index() -> Response:
 
 @app.post("/api/scan")
 def api_scan():
+    """Fast phase — everything except CVE correlation. Returns near-instantly."""
     data = request.get_json(force=True, silent=True) or {}
     target = (data.get("target") or "").strip()
     if not target:
@@ -40,21 +41,38 @@ def api_scan():
         return jsonify({"error": "Confirm you're authorized to scan this target first."}), 403
 
     try:
-        result = run_scan(
-            target,
-            do_paths=bool(data.get("paths", True)),
-            do_cve=bool(data.get("cve", True)),
-        )
-    except Exception as e:  # surface failures to the UI rather than 500-ing silently
+        result = run_fast_scan(target, do_paths=bool(data.get("paths", True)))
+    except Exception as e:
         return jsonify({"error": f"Scan couldn't complete: {e}"}), 500
 
     findings = sorted(result.findings, key=lambda f: _SEV_ORDER.get(f.severity, 9))
     return jsonify({
         "target": result.target,
+        "observed_url": result.observed_url,
         "started": result.started,
         "software": result.software,
         "findings": [asdict(f) for f in findings],
     })
+
+
+@app.post("/api/cve")
+def api_cve():
+    """CVE phase — queried separately so it never blocks the fast results.
+    Cached on disk, so repeat lookups of the same software are instant."""
+    data = request.get_json(force=True, silent=True) or {}
+    software = data.get("software") or []
+    observed = (data.get("observed_url") or data.get("target") or "").strip()
+    if not software or not observed:
+        return jsonify({"findings": []})
+
+    r = ScanResult(target=observed, started="", observed_url=observed, software=list(software))
+    try:
+        correlate_cves(r, observed)
+    except Exception as e:
+        return jsonify({"error": f"CVE lookup failed: {e}", "findings": []}), 200
+
+    findings = sorted(r.findings, key=lambda f: _SEV_ORDER.get(f.severity, 9))
+    return jsonify({"findings": [asdict(f) for f in findings]})
 
 
 def main() -> None:
@@ -239,24 +257,42 @@ function findingCard(f){
   </div>`;
 }
 
+let currentFindings = [];
+
 async function scan(){
   const target = targetEl.value.trim();
   scanEl.disabled = true;
   summaryEl.hidden = true; summaryEl.innerHTML = ""; resultsEl.innerHTML = "";
+  currentFindings = [];
   statusEl.className = "status";
-  statusEl.innerHTML = `scanning ${esc(target)} <span class="blink">▊</span>` +
-    ($("#cve").checked ? `  ·  CVE lookups can take a moment` : ``);
+  statusEl.innerHTML = `scanning ${esc(target)} <span class="blink">▊</span>`;
+  const wantCve = $("#cve").checked;
   try{
     const res = await fetch("/api/scan", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({
-        target, authorized: authEl.checked,
-        paths: $("#paths").checked, cve: $("#cve").checked,
-      })
+      body: JSON.stringify({ target, authorized: authEl.checked, paths: $("#paths").checked })
     });
     const data = await res.json();
     if(!res.ok){ statusEl.className = "status err"; statusEl.textContent = data.error || "Scan failed."; return; }
-    render(data);
+
+    // fast results render immediately
+    currentFindings = data.findings;
+    render(data.target, currentFindings, wantCve && data.software.length ? "checking known CVEs…" : "");
+
+    // CVE phase, fetched separately so it never blocks the above
+    if(wantCve && data.software.length){
+      try{
+        const cveRes = await fetch("/api/cve", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ software: data.software, observed_url: data.observed_url || data.target })
+        });
+        const cveData = await cveRes.json();
+        currentFindings = currentFindings.concat(cveData.findings || []);
+        render(data.target, currentFindings, "");
+      }catch(e){
+        render(data.target, currentFindings, "");
+      }
+    }
   }catch(err){
     statusEl.className = "status err";
     statusEl.textContent = "Couldn't reach the scanner. Is the server still running?";
@@ -265,19 +301,25 @@ async function scan(){
   }
 }
 
-function render(data){
+const SEV_ORDER = {high:0, medium:1, low:2, info:3};
+
+function render(target, findings, note){
+  findings.sort((a,b) => (SEV_ORDER[a.severity]??9) - (SEV_ORDER[b.severity]??9));
   const counts = {high:0,medium:0,low:0,info:0};
-  data.findings.forEach(f => counts[f.severity] = (counts[f.severity]||0)+1);
+  findings.forEach(f => counts[f.severity] = (counts[f.severity]||0)+1);
+
   statusEl.className = "status";
-  statusEl.textContent = `${data.findings.length} findings on ${data.target}`;
+  statusEl.innerHTML = `${findings.length} findings on ${esc(target)}` +
+    (note ? `  ·  <span class="blink">${esc(note)}</span>` : "");
 
   const chips = ["high","medium","low","info"]
     .map(s => `<span class="chip ${s}">${s} ${counts[s]||0}</span>`).join("");
-  const stack = data.software.length ? `<span class="stack">stack: ${esc(data.software.join(", "))}</span>` : "";
-  summaryEl.innerHTML = chips + stack;
+  const stackList = [...new Set(findings.filter(f=>f.category==="fingerprint")
+    .map(f=>f.exposed).filter(Boolean))];
+  summaryEl.innerHTML = chips;
   summaryEl.hidden = false;
 
-  resultsEl.innerHTML = data.findings.map(findingCard).join("");
+  resultsEl.innerHTML = findings.map(findingCard).join("");
 }
 </script>
 </body></html>"""

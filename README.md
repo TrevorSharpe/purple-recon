@@ -59,6 +59,19 @@ exposed to your network. The page is responsive and works on a phone.
 **On iPhone?** See [MOBILE.md](MOBILE.md) — run it on-device with iSH, or run
 it on another machine and reach it privately from the phone.
 
+
+## Speed
+
+The scan is built to feel instant: the target's headers, TLS, fingerprint, and
+exposed-path checks all run over one reused connection in parallel, so the main
+results come back in well under a second on a normal connection. The CVE lookup
+(the one slow part, since it queries the NVD) runs as a separate phase — in the
+GUI the findings render first and CVEs stream in after, and results are cached
+for 7 days so repeat scans of the same software are instant.
+
+Inside iSH the x86 emulation adds overhead; for the snappiest experience run the
+server on a real machine and browse to it from the phone (see MOBILE.md).
+
 ## ⚠️ Authorized use only
 
 Only scan systems you **own** or have **explicit written permission** to test.
