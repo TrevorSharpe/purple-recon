@@ -561,6 +561,81 @@ def _impact_sentence(cvss: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# SQL / injection — PASSIVE checks only. No payloads are ever sent; these read
+# normal responses and page structure. Active injection testing is deliberately
+# out of scope (use a purpose-built tool you drive under your own authorization).
+# --------------------------------------------------------------------------- #
+_DB_ERROR_SIGNATURES = [
+    (re.compile(r"you have an error in your SQL syntax", re.I), "MySQL"),
+    (re.compile(r"warning:\s*mysqli?_", re.I), "MySQL"),
+    (re.compile(r"unclosed quotation mark after the character string", re.I), "MSSQL"),
+    (re.compile(r"microsoft (?:OLE DB|SQL server)", re.I), "MSSQL"),
+    (re.compile(r"system\.data\.sqlclient\.sqlexception", re.I), "MSSQL"),
+    (re.compile(r"ORA-\d{5}", re.I), "Oracle"),
+    (re.compile(r"(?:PostgreSQL.*ERROR|pg_query\(\)|pg_exec\(\))", re.I), "PostgreSQL"),
+    (re.compile(r"(?:SQLITE_ERROR|sqlite3?\.OperationalError)", re.I), "SQLite"),
+    (re.compile(r"(?:org\.hibernate\.|SQLGrammarException)", re.I), "Hibernate/JDBC"),
+    (re.compile(r"SQLSTATE\[", re.I), "SQL"),
+]
+
+_INPUT_NAME_RE = re.compile(
+    r'<(?:input|textarea|select)\b[^>]*\bname=["\']([^"\']+)["\']', re.I)
+_FORM_RE = re.compile(r"<form\b", re.I)
+
+
+def detect_db_errors(resp: requests.Response, result: ScanResult) -> None:
+    """Flag pages that already return a raw database error in their normal
+    response. No injection — just reading what the server sends."""
+    body = resp.text[:200_000]
+    for rx, db in _DB_ERROR_SIGNATURES:
+        m = rx.search(body)
+        if m:
+            snippet = body[max(0, m.start() - 30):m.start() + 90].replace("\n", " ").strip()
+            result.add(
+                category="sql", title=f"Database error exposed ({db})", severity="medium",
+                location=str(resp.url),
+                detail="The page returns a raw database error in its response.",
+                impact="Leaked DB errors reveal the database type and query structure, and "
+                       "signal that user input may reach SQL unsanitized — a common precursor "
+                       "to SQL injection.",
+                exposed=f"…{snippet}…",
+                remediation="Return generic error pages and log details server-side only; use "
+                            "parameterized queries / prepared statements so input can't alter SQL.",
+            )
+            break  # one per page is enough
+
+
+def detect_input_surface(resp: requests.Response, result: ScanResult) -> None:
+    """Inventory where user input enters (query params, form fields) so they can
+    be reviewed for parameterized queries. No payloads — just reads the HTML."""
+    from urllib.parse import parse_qs
+    url = str(resp.url)
+    params = list(parse_qs(urlparse(url).query).keys())
+    body = resp.text[:200_000]
+    inputs: list[str] = []
+    for n in _INPUT_NAME_RE.findall(body):
+        if n not in inputs:
+            inputs.append(n)
+    forms = len(_FORM_RE.findall(body))
+    if not params and not (forms and inputs):
+        return
+    bits = []
+    if params:
+        bits.append("query params: " + ", ".join(params[:10]))
+    if forms and inputs:
+        bits.append(f"{forms} form(s); fields: " + ", ".join(inputs[:12]))
+    result.add(
+        category="surface", title="User-input surface to review", severity="info",
+        location=url,
+        detail="Places that accept user input — review each to confirm it uses "
+               "parameterized queries / prepared statements and server-side validation.",
+        exposed=" | ".join(bits),
+        remediation="Never build SQL by string concatenation; use parameterized queries, "
+                    "prepared statements, or a well-configured ORM, and validate input.",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Site crawl (same-host, bounded, GET-only) + per-page audit
 # --------------------------------------------------------------------------- #
 _SKIP_EXT = (".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".css",
@@ -589,6 +664,8 @@ def _crawl_and_audit(start: str, start_resp, result: ScanResult,
         result.pages.append({"url": str(resp.url), "status": resp.status_code,
                              "content_type": ctype})
         audit_headers(resp, result)  # headers can vary by route/endpoint
+        detect_db_errors(resp, result)
+        detect_input_surface(resp, result)
 
         if "text/html" not in ctype or depth + 1 > max_depth:
             continue
@@ -678,6 +755,8 @@ def run_fast_scan(target: str, do_paths: bool = True) -> ScanResult:
 
     fingerprint(resp, result)
     audit_headers(resp, result)
+    detect_db_errors(resp, result)
+    detect_input_surface(resp, result)
 
     observed = str(resp.url)
     parsed = urlparse(observed)

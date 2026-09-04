@@ -16,6 +16,11 @@ proper authorization.
 - **TLS inspection** — protocol version, cipher, certificate expiry
 - **Exposure discovery** — common accidentally-exposed paths (`.git`, `.env`,
   `server-status`, backups…) via non-destructive `GET` requests
+- **SQL surface (passive)** — flags pages that leak raw database errors, and
+  inventories where user input enters (query params, form fields) so you can
+  review them for parameterized queries. No payloads are sent; active injection
+  testing is intentionally out of scope (use sqlmap / OWASP ZAP under your own
+  authorization for that).
 - **CVE correlation** — detected versions → known CVEs via the NVD 2.0 API,
   each linked to its NVD detail page (which references Exploit-DB where relevant)
 
