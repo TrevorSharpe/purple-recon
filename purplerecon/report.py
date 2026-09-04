@@ -32,7 +32,15 @@ def to_terminal(result: ScanResult) -> str:
         counts[f.severity] = counts.get(f.severity, 0) + 1
     out.append("Findings: " + "  ".join(f"{s}:{counts.get(s,0)}"
                for s in ("high", "medium", "low", "info")))
+    if result.pages:
+        out.append(f"Pages scanned: {len(result.pages)}")
     out.append("─" * 50)
+
+    if result.pages:
+        out.append(f"{_PURPLE}SITE MAP{_RESET}")
+        for pg in result.pages:
+            out.append(f"  {str(pg.get('status')):>5}  {pg.get('url')}")
+        out.append("─" * 50)
 
     for f in _sorted(result):
         c = _SEV_COLOR.get(f.severity, "")

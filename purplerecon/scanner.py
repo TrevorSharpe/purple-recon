@@ -25,10 +25,11 @@ import os
 import socket
 import tempfile
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -69,6 +70,7 @@ class ScanResult:
     started: str
     observed_url: str = ""  # final URL after redirects (where findings were seen)
     software: list[str] = field(default_factory=list)
+    pages: list = field(default_factory=list)  # site map: dicts of url/status/type
     findings: list[Finding] = field(default_factory=list)
 
     def add(self, **kw) -> None:
@@ -556,6 +558,104 @@ def _impact_sentence(cvss: dict) -> str:
     result_txt = "; ".join(cons) if cons else "impact per the CVSS vector"
     vec = cvss.get("vectorString", "")
     return f"Exploitable {where}. Potential result — {result_txt}. CVSS vector: {vec}."
+
+
+# --------------------------------------------------------------------------- #
+# Site crawl (same-host, bounded, GET-only) + per-page audit
+# --------------------------------------------------------------------------- #
+_SKIP_EXT = (".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".css",
+             ".js", ".mjs", ".pdf", ".zip", ".gz", ".mp4", ".mp3", ".wav",
+             ".woff", ".woff2", ".ttf", ".eot", ".xml", ".json", ".rss", ".map")
+
+
+def _crawl_and_audit(start: str, start_resp, result: ScanResult,
+                     max_pages: int, max_depth: int) -> None:
+    """BFS over same-host pages. GET only, bounded, non-destructive. Records a
+    site map and runs the per-page security-header audit on each page."""
+    host = urlparse(start).netloc
+    seen = {start}
+    q: deque = deque([(start, start_resp, 0)])
+
+    while q and len(result.pages) < max_pages:
+        url, resp, depth = q.popleft()
+        if resp is None:
+            try:
+                resp = _SESSION.get(url, timeout=8, allow_redirects=True)
+            except RequestException:
+                result.pages.append({"url": url, "status": "error", "content_type": ""})
+                continue
+
+        ctype = resp.headers.get("Content-Type", "").split(";")[0].strip()
+        result.pages.append({"url": str(resp.url), "status": resp.status_code,
+                             "content_type": ctype})
+        audit_headers(resp, result)  # headers can vary by route/endpoint
+
+        if "text/html" not in ctype or depth + 1 > max_depth:
+            continue
+        for href in re.findall(r'href=["\']([^"\'#]+)["\']', resp.text, re.I):
+            nxt = urljoin(url, href).split("#")[0]
+            p = urlparse(nxt)
+            if p.scheme not in ("http", "https") or p.netloc != host:
+                continue  # same-host only — never wander onto other domains
+            if p.path.lower().endswith(_SKIP_EXT):
+                continue
+            if nxt not in seen and len(seen) < max_pages:
+                seen.add(nxt)
+                q.append((nxt, None, depth + 1))
+
+
+def _dedupe_site_findings(result: ScanResult) -> None:
+    """Site-wide header issues repeat on every page; collapse each to one finding
+    with a page count so the report isn't dozens of identical lines."""
+    groups: dict = {}
+    others: list = []
+    for f in result.findings:
+        if f.category == "headers":
+            groups.setdefault((f.title, f.severity), []).append(f)
+        else:
+            others.append(f)
+    merged = []
+    for fs in groups.values():
+        first = fs[0]
+        if len(fs) > 1:
+            first.detail = f"{first.detail} — present on {len(fs)} scanned pages"
+        merged.append(first)
+    result.findings = others + merged
+
+
+def run_site_scan(target: str, max_pages: int = 25, max_depth: int = 2,
+                  do_cve: bool = True) -> ScanResult:
+    """Map a site's pages (same host only) and run per-page checks across all of
+    them, plus the host-level checks (TLS, exposed paths, CVEs) once."""
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
+    result = ScanResult(target=target, started=datetime.now(timezone.utc).isoformat())
+
+    resp = probe(target, result)
+    if resp is None:
+        result.findings = [f for f in result.findings if f.location]
+        return result
+
+    observed = str(resp.url)
+    parsed = urlparse(observed)
+    fingerprint(resp, result)
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futures = [ex.submit(discover_paths, observed, result)]
+        if parsed.scheme == "https":
+            futures.append(ex.submit(inspect_tls, parsed.hostname,
+                                     parsed.port or 443, result, observed))
+        for fut in futures:
+            fut.result()
+
+    _crawl_and_audit(observed, resp, result, max_pages, max_depth)
+
+    if do_cve and result.software:
+        correlate_cves(result, observed)
+
+    _dedupe_site_findings(result)
+    result.findings = [f for f in result.findings if f.location]
+    return result
 
 
 # --------------------------------------------------------------------------- #

@@ -21,7 +21,7 @@ from dataclasses import asdict
 
 from flask import Flask, request, jsonify, Response
 
-from .scanner import run_fast_scan, correlate_cves, ScanResult
+from .scanner import run_fast_scan, correlate_cves, run_site_scan, ScanResult
 
 app = Flask(__name__)
 
@@ -75,6 +75,36 @@ def api_scan():
         "observed_url": result.observed_url,
         "started": result.started,
         "software": result.software,
+        "findings": [asdict(f) for f in findings],
+    })
+
+
+@app.post("/api/sitescan")
+def api_sitescan():
+    """Crawl the site (same host, bounded) and scan every page. One request;
+    slower than the two-phase scan, so the UI marks it as such."""
+    data = request.get_json(force=True, silent=True) or {}
+    target = (data.get("target") or "").strip()
+    if not target:
+        return jsonify({"error": "Enter a target URL to scan."}), 400
+    if not data.get("authorized"):
+        return jsonify({"error": "Confirm you're authorized to scan this target first."}), 403
+    try:
+        max_pages = int(data.get("max_pages", 25))
+    except (TypeError, ValueError):
+        max_pages = 25
+    max_pages = max(1, min(max_pages, 100))
+    try:
+        result = run_site_scan(target, max_pages=max_pages, do_cve=bool(data.get("cve", True)))
+    except Exception as e:
+        return jsonify({"error": f"Scan couldn't complete: {e}"}), 500
+
+    findings = sorted(result.findings, key=lambda f: _SEV_ORDER.get(f.severity, 9))
+    return jsonify({
+        "target": result.target,
+        "observed_url": result.observed_url,
+        "software": result.software,
+        "pages": result.pages,
         "findings": [asdict(f) for f in findings],
     })
 
@@ -199,6 +229,15 @@ _PAGE = r"""<!doctype html>
   .l-ref{border-left-color:var(--p)} .l-ref .lbl{color:var(--p2)} .l-ref a{color:var(--p2)}
   a{word-break:break-all}
   .foot{margin-top:26px;color:#6d5b90;font-size:11px;line-height:1.6}
+  /* site map */
+  .sitemap{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+           padding:12px 14px;margin-bottom:16px}
+  .sitemap h3{margin:0 0 8px;font-size:12px;color:var(--p2);text-transform:uppercase;letter-spacing:.5px}
+  .pagerow{display:flex;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px solid #241338}
+  .pagerow:last-child{border-bottom:none}
+  .pcode{min-width:38px;font-weight:700}
+  .pcode.ok{color:var(--ok)} .pcode.warn{color:var(--med)} .pcode.err{color:var(--high)}
+  .purl{color:#c4b5db;word-break:break-all}
   /* mobile */
   @media (max-width:560px){
     body{padding:22px 14px;padding-bottom:max(22px,env(safe-area-inset-bottom))}
@@ -229,6 +268,7 @@ _PAGE = r"""<!doctype html>
       <div class="opts">
         <label class="opt"><input type="checkbox" id="paths" checked> path discovery</label>
         <label class="opt"><input type="checkbox" id="cve" checked> CVE lookup <span style="color:#6d5b90">(slower)</span></label>
+        <label class="opt"><input type="checkbox" id="crawl"> crawl whole site <span style="color:#6d5b90">(slower)</span></label>
         <label class="opt auth"><input type="checkbox" id="authorized"> I'm authorized to scan this target</label>
       </div>
     </div>
@@ -237,6 +277,7 @@ _PAGE = r"""<!doctype html>
 
     <div class="status" id="status"></div>
     <div class="summary" id="summary" hidden></div>
+    <div id="sitemap"></div>
     <div id="results"></div>
 
     <div class="foot">Purple Recon runs locally. CVE data from the NVD; findings are for you to verify and fix.</div>
@@ -288,14 +329,48 @@ function findingCard(f){
 
 let currentFindings = [];
 
+function renderSitemap(pages){
+  const el = document.querySelector("#sitemap");
+  if(!pages || !pages.length){ el.innerHTML = ""; return; }
+  const rows = pages.map(pg => {
+    const code = String(pg.status);
+    const cls = code.startsWith("2") ? "ok" : code.startsWith("4")||code.startsWith("5") ? "err" : "warn";
+    return `<div class="pagerow"><span class="pcode ${cls}">${esc(code)}</span><span class="purl">${esc(pg.url)}</span></div>`;
+  }).join("");
+  el.innerHTML = `<div class="sitemap"><h3>Site map — ${pages.length} pages</h3>${rows}</div>`;
+}
+
 async function scan(){
   const target = targetEl.value.trim();
   scanEl.disabled = true;
-  summaryEl.hidden = true; summaryEl.innerHTML = ""; resultsEl.innerHTML = "";
+  summaryEl.hidden = true; summaryEl.innerHTML = "";
+  document.querySelector("#sitemap").innerHTML = ""; resultsEl.innerHTML = "";
   currentFindings = [];
   statusEl.className = "status";
-  statusEl.innerHTML = `scanning ${esc(target)} <span class="blink">▊</span>`;
   const wantCve = $("#cve").checked;
+  const wantCrawl = $("#crawl").checked;
+
+  // Crawl mode: one request, scans every page (slower).
+  if(wantCrawl){
+    statusEl.innerHTML = `crawling & scanning ${esc(target)} <span class="blink">▊</span>  ·  this can take a bit`;
+    try{
+      const res = await fetch("/api/sitescan", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ target, authorized: authEl.checked, cve: wantCve, max_pages: 25 })
+      });
+      const data = await res.json();
+      if(!res.ok){ statusEl.className = "status err"; statusEl.textContent = data.error || "Scan failed."; return; }
+      renderSitemap(data.pages);
+      currentFindings = data.findings;
+      render(data.target, currentFindings, "");
+    }catch(err){
+      statusEl.className = "status err";
+      statusEl.textContent = "Couldn't reach the scanner. Is the server still running?";
+    }finally{ refresh(); }
+    return;
+  }
+
+  statusEl.innerHTML = `scanning ${esc(target)} <span class="blink">▊</span>`;
   try{
     const res = await fetch("/api/scan", {
       method:"POST", headers:{"Content-Type":"application/json"},
@@ -304,11 +379,9 @@ async function scan(){
     const data = await res.json();
     if(!res.ok){ statusEl.className = "status err"; statusEl.textContent = data.error || "Scan failed."; return; }
 
-    // fast results render immediately
     currentFindings = data.findings;
     render(data.target, currentFindings, wantCve && data.software.length ? "checking known CVEs…" : "");
 
-    // CVE phase, fetched separately so it never blocks the above
     if(wantCve && data.software.length){
       try{
         const cveRes = await fetch("/api/cve", {

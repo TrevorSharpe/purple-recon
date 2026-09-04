@@ -36,6 +36,8 @@ python -m purplerecon example.com --html out.html  # themed HTML report
 python -m purplerecon example.com --json out.json  # machine-readable JSON
 python -m purplerecon example.com --sarif out.sarif # SARIF 2.1.0 for CI/code-scanning
 python -m purplerecon example.com --no-cve -q      # skip NVD lookups, suppress terminal
+python -m purplerecon example.com --crawl          # crawl the whole site (same host) and scan every page
+python -m purplerecon example.com --crawl --max-pages 50
 ```
 
 The **SARIF** output drops into GitHub code-scanning, Azure DevOps, and most
