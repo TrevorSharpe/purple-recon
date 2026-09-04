@@ -1,0 +1,21 @@
+# systemd unit — runs Purple Recon under gunicorn, bound to localhost only.
+# Caddy (or nginx) terminates TLS and handles auth in front of it.
+# Install: copy to /etc/systemd/system/purplerecon.service, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now purplerecon
+
+[Unit]
+Description=Purple Recon web GUI
+After=network.target
+
+[Service]
+Type=simple
+User=purplerecon
+WorkingDirectory=/opt/purple-recon
+# Belt-and-suspenders: app-level auth in addition to the proxy. Change this.
+Environment=PURPLERECON_AUTH=trevor:CHANGE_ME
+ExecStart=/opt/purple-recon/.venv/bin/gunicorn -w 2 -k gthread --threads 4 -b 127.0.0.1:8000 purplerecon.web:app
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

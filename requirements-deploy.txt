@@ -1,0 +1,2 @@
+# Production server (in addition to requirements.txt)
+gunicorn>=21.0

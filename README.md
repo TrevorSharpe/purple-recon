@@ -62,6 +62,9 @@ it on another machine and reach it privately from the phone.
 **No install at all?** See [CODESPACES.md](CODESPACES.md) — run it in a GitHub
 Codespace and open the forwarded URL in any browser, including your phone.
 
+**Host it at your own domain?** See [DEPLOY.md](DEPLOY.md) — self-host behind
+HTTPS + auth, or keep it private over Tailscale. (Never expose a scanner unauthenticated.)
+
 
 ## Speed
 

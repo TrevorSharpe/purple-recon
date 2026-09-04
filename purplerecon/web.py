@@ -14,6 +14,9 @@ AUTHORIZED USE ONLY — the page requires you to confirm authorization per scan.
 from __future__ import annotations
 
 import argparse
+import base64
+import hmac
+import os
 from dataclasses import asdict
 
 from flask import Flask, request, jsonify, Response
@@ -23,6 +26,27 @@ from .scanner import run_fast_scan, correlate_cves, ScanResult
 app = Flask(__name__)
 
 _SEV_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
+
+# Optional HTTP basic auth. Set PURPLERECON_AUTH="user:password" to require it on
+# every request — essential if this is reachable beyond localhost, since an open
+# scanner lets anyone drive your server to scan other targets.
+_AUTH = os.environ.get("PURPLERECON_AUTH", "")
+
+
+@app.before_request
+def _require_auth():
+    if not _AUTH:
+        return None
+    hdr = request.headers.get("Authorization", "")
+    if hdr.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(hdr[6:]).decode("utf-8", "replace")
+        except Exception:
+            decoded = ""
+        if hmac.compare_digest(decoded, _AUTH):
+            return None
+    return Response("Authentication required.", 401,
+                    {"WWW-Authenticate": 'Basic realm="Purple Recon"'})
 
 
 @app.get("/")
@@ -81,6 +105,11 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1", help="bind address (default localhost)")
     p.add_argument("--port", type=int, default=8000, help="port (default 8000)")
     args = p.parse_args()
+    if args.host not in ("127.0.0.1", "localhost") and not _AUTH:
+        print("\n  ⚠  Binding to a non-local address with no auth configured.")
+        print("     A reachable scanner with no auth lets anyone drive your server.")
+        print("     Set PURPLERECON_AUTH='user:password', or keep it behind an")
+        print("     authenticated proxy / VPN (see DEPLOY.md).")
     print(f"\n  ◆ Purple Recon GUI → http://{args.host}:{args.port}\n")
     app.run(host=args.host, port=args.port, debug=False)
 

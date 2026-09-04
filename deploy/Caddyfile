@@ -1,0 +1,12 @@
+# Purple Recon behind Caddy — automatic HTTPS + basic auth.
+# Point a DNS A record for scanner.trevor.lol at your server first.
+#
+# Generate the password hash with:  caddy hash-password
+# (older Caddy versions use the directive name `basicauth` instead of `basic_auth`)
+
+scanner.trevor.lol {
+    basic_auth {
+        trevor $2a$14$REPLACE_WITH_BCRYPT_HASH_FROM_caddy_hash_password
+    }
+    reverse_proxy 127.0.0.1:8000
+}
